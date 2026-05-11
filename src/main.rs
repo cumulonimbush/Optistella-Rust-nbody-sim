@@ -1,201 +1,158 @@
-#![windows_subsystem = "windows"]
+use std::f32::consts::{FRAC_PI_4, PI};
 
 use bevy::{
-    color::palettes::css::*,
-    math::ops,
+    camera_controller::free_camera::{FreeCamera, FreeCameraPlugin /*, FreeCameraState*/},
+    color::palettes::tailwind,
     prelude::*,
-    sprite::{Anchor, Text2dShadow},
-    text::{FontSmoothing, LineBreak, TextBounds},
+    // window::{CursorGrabMode, CursorOptions},
 };
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (animate_translation, animate_rotation, animate_scale),
-        )
+        .add_plugins(FreeCameraPlugin)
+        // .add_plugins(CursorGrab)
+        .add_systems(Startup, (setup, spawn_lights, spawn_world))
         .run();
 }
 
-#[derive(Component)]
-struct AnimateTranslation;
-
-#[derive(Component)]
-struct AnimateRotation;
-
-#[derive(Component)]
-struct AnimateScale;
-
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let font = asset_server.load("fonts/font.otf");
-    let text_font = TextFont {
-        font: font.clone(),
-        font_size: 50.0,
-        ..default()
-    };
-    let text_justification = Justify::Center;
-    commands.spawn(Camera2d);
-    // Demonstrate changing translation
+fn setup(mut commands: Commands) {
     commands.spawn((
-        Text2d::new(" translation "),
-        text_font.clone(),
-        TextLayout::new_with_justify(text_justification),
-        TextBackgroundColor(Color::BLACK.with_alpha(0.5)),
-        Text2dShadow::default(),
-        AnimateTranslation,
-    ));
-    // Demonstrate changing rotation
-    commands.spawn((
-        Text2d::new(" rotation "),
-        text_font.clone(),
-        TextLayout::new_with_justify(text_justification),
-        TextBackgroundColor(Color::BLACK.with_alpha(0.5)),
-        Text2dShadow::default(),
-        AnimateRotation,
-    ));
-    // Demonstrate changing scale
-    commands.spawn((
-        Text2d::new(" scale "),
-        text_font,
-        TextLayout::new_with_justify(text_justification),
-        Transform::from_translation(Vec3::new(400.0, 0.0, 0.0)),
-        TextBackgroundColor(Color::BLACK.with_alpha(0.5)),
-        Text2dShadow::default(),
-        AnimateScale,
-    ));
-    // Demonstrate text wrapping
-    let slightly_smaller_text_font = TextFont {
-        font,
-        font_size: 35.0,
-        ..default()
-    };
-    let box_size = Vec2::new(300.0, 200.0);
-    let box_position = Vec2::new(0.0, -250.0);
-    let box_color = Color::srgb(0.25, 0.25, 0.55);
-    let text_shadow_color = box_color.darker(0.05);
-    commands.spawn((
-        Sprite::from_color(Color::srgb(0.25, 0.25, 0.55), box_size),
-        Transform::from_translation(box_position.extend(0.0)),
-        children![(
-            Text2d::new("this text wraps in the box\n(Unicode linebreaks)"),
-            slightly_smaller_text_font.clone(),
-            TextLayout::new(Justify::Left, LineBreak::WordBoundary),
-            // Wrap text in the rectangle
-            TextBounds::from(box_size),
-            // Ensure the text is drawn on top of the box
-            Transform::from_translation(Vec3::Z),
-            // Add a shadow to the text
-            Text2dShadow {
-                color: text_shadow_color,
-                ..default()
-            },
-            Underline,
-        )],
-    ));
-
-    let other_box_size = Vec2::new(300.0, 200.0);
-    let other_box_position = Vec2::new(320.0, -250.0);
-    commands.spawn((
-        Sprite::from_color(Color::srgb(0.25, 0.25, 0.55), other_box_size),
-        Transform::from_translation(other_box_position.extend(0.0)),
-        children![(
-            Text2d::new("this text wraps in the box\n(AnyCharacter linebreaks)"),
-            slightly_smaller_text_font.clone(),
-            TextLayout::new(Justify::Left, LineBreak::AnyCharacter),
-            // Wrap text in the rectangle
-            TextBounds::from(other_box_size),
-            // Ensure the text is drawn on top of the box
-            Transform::from_translation(Vec3::Z),
-            // Add a shadow to the text
-            Text2dShadow {
-                color: text_shadow_color,
-                ..default()
-            }
-        )],
-    ));
-
-    // Demonstrate font smoothing off
-    commands.spawn((
-        Text2d::new("This text has\nFontSmoothing::None\nAnd Justify::Center"),
-        slightly_smaller_text_font
-            .clone()
-            .with_font_smoothing(FontSmoothing::None),
-        TextLayout::new_with_justify(Justify::Center),
-        Transform::from_translation(Vec3::new(-400.0, -250.0, 0.0)),
-        // Add a black shadow to the text
-        Text2dShadow::default(),
-    ));
-
-    let make_child = move |(text_anchor, color): (Anchor, Color)| {
-        (
-            Text2d::new(" Anchor".to_string()),
-            slightly_smaller_text_font.clone(),
-            text_anchor,
-            TextBackgroundColor(Color::WHITE.darker(0.8)),
-            Transform::from_translation(-1. * Vec3::Z),
-            children![
-                (
-                    TextSpan("::".to_string()),
-                    slightly_smaller_text_font.clone(),
-                    TextColor(LIGHT_GREY.into()),
-                    TextBackgroundColor(DARK_BLUE.into()),
-                ),
-                (
-                    TextSpan(format!("{text_anchor:?} ")),
-                    slightly_smaller_text_font.clone(),
-                    TextColor(color),
-                    TextBackgroundColor(color.darker(0.3)),
-                )
-            ],
-        )
-    };
-
-    commands.spawn((
-        Sprite {
-            color: Color::Srgba(LIGHT_CYAN),
-            custom_size: Some(Vec2::new(10., 10.)),
-            ..Default::default()
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::X, Vec3::Y),
+        FreeCamera {
+            sensitivity: 0.2,
+            friction: 25.0,
+            walk_speed: 3.0,
+            run_speed: 9.0,
+            key_up: KeyCode::Space,
+            key_down: KeyCode::ShiftLeft,
+            key_run: KeyCode::ControlLeft,
+            mouse_key_cursor_grab: MouseButton::Other(9999),
+            keyboard_key_toggle_cursor_grab: KeyCode::Escape,
+            ..default()
         },
-        Transform::from_translation(250. * Vec3::Y),
-        children![
-            make_child((Anchor::TOP_LEFT, Color::Srgba(LIGHT_SALMON))),
-            make_child((Anchor::TOP_RIGHT, Color::Srgba(LIGHT_GREEN))),
-            make_child((Anchor::BOTTOM_RIGHT, Color::Srgba(LIGHT_BLUE))),
-            make_child((Anchor::BOTTOM_LEFT, Color::Srgba(LIGHT_YELLOW))),
-        ],
     ));
 }
 
-fn animate_translation(
-    time: Res<Time>,
-    mut query: Query<&mut Transform, (With<Text2d>, With<AnimateTranslation>)>,
-) {
-    for mut transform in &mut query {
-        transform.translation.x = 100.0 * ops::sin(time.elapsed_secs()) - 400.0;
-        transform.translation.y = 100.0 * ops::cos(time.elapsed_secs());
-    }
+// struct CursorGrab;
+// impl Plugin for CursorGrab {
+//     fn build(&self, app: &mut App) {
+//         app.add_systems(PostStartup, setup_cursor_grab)
+//             .add_systems(Update, cursor_ungrab);
+//     }
+// }
+
+// fn setup_cursor_grab(
+//     mut cursor_options: Single<&mut CursorOptions>,
+//     mut free_camera_query: Query<(&mut FreeCamera, &mut FreeCameraState)>,
+// ) {
+//     cursor_options.visible = false;
+//     cursor_options.grab_mode = CursorGrabMode::Locked;
+//     let (_, mut camera_state) = free_camera_query.single_mut().unwrap();
+//     camera_state.enabled = true;
+// }
+
+// fn cursor_ungrab(
+//     mut cursor_options: Single<&mut CursorOptions>,
+//     mut free_camera_query: Query<(&mut FreeCamera, &mut FreeCameraState)>,
+//     mouse: Res<ButtonInput<MouseButton>>,
+//     key: Res<ButtonInput<KeyCode>>,
+// ) {
+//     let (_, mut free_camera_state) = free_camera_query.single_mut().unwrap();
+//     if mouse.just_pressed(MouseButton::Left) {
+//         cursor_options.visible = false;
+//         cursor_options.grab_mode = CursorGrabMode::Locked;
+//         free_camera_state.enabled = true;
+//     }
+//     if key.just_pressed(KeyCode::Escape) {
+//         cursor_options.visible = true;
+//         cursor_options.grab_mode = CursorGrabMode::None;
+//         free_camera_state.enabled = false;
+//     }
+// }
+
+fn spawn_lights(mut commands: Commands) {
+    // Main light
+    commands.spawn((
+        PointLight {
+            color: Color::from(tailwind::ORANGE_300),
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 3.0, 0.0),
+    ));
+    // Light behind wall
+    commands.spawn((
+        PointLight {
+            color: Color::WHITE,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(-3.5, 3.0, 0.0),
+    ));
+    // Light under floor
+    commands.spawn((
+        PointLight {
+            color: Color::from(tailwind::RED_300),
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(0.0, -0.5, 0.0),
+    ));
 }
 
-fn animate_rotation(
-    time: Res<Time>,
-    mut query: Query<&mut Transform, (With<Text2d>, With<AnimateRotation>)>,
+fn spawn_world(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    for mut transform in &mut query {
-        transform.rotation = Quat::from_rotation_z(ops::cos(time.elapsed_secs()));
-    }
-}
+    let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let floor = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(10.0)));
+    let sphere = meshes.add(Sphere::new(0.5));
+    let wall = meshes.add(Cuboid::new(0.2, 4.0, 3.0));
 
-fn animate_scale(
-    time: Res<Time>,
-    mut query: Query<&mut Transform, (With<Text2d>, With<AnimateScale>)>,
-) {
-    // Consider changing font-size instead of scaling the transform. Scaling a Text2D will scale the
-    // rendered quad, resulting in a pixellated look.
-    for mut transform in &mut query {
-        let scale = (ops::sin(time.elapsed_secs()) + 1.1) * 2.0;
-        transform.scale.x = scale;
-        transform.scale.y = scale;
-    }
+    let blue_material = materials.add(Color::from(tailwind::BLUE_700));
+    let red_material = materials.add(Color::from(tailwind::RED_950));
+    let white_material = materials.add(Color::WHITE);
+
+    // Top side of floor
+    commands.spawn((
+        Mesh3d(floor.clone()),
+        MeshMaterial3d(white_material.clone()),
+    ));
+    // Under side of floor
+    commands.spawn((
+        Mesh3d(floor.clone()),
+        MeshMaterial3d(white_material.clone()),
+        Transform::from_xyz(0.0, -0.01, 0.0).with_rotation(Quat::from_rotation_x(PI)),
+    ));
+    // Blue sphere
+    commands.spawn((
+        Mesh3d(sphere.clone()),
+        MeshMaterial3d(blue_material.clone()),
+        Transform::from_xyz(3.0, 1.5, 0.0),
+    ));
+    // Tall wall
+    commands.spawn((
+        Mesh3d(wall.clone()),
+        MeshMaterial3d(white_material.clone()),
+        Transform::from_xyz(-3.0, 2.0, 0.0),
+    ));
+    // Cube behind wall
+    commands.spawn((
+        Mesh3d(cube.clone()),
+        MeshMaterial3d(blue_material.clone()),
+        Transform::from_xyz(-4.2, 0.5, 0.0),
+    ));
+    // Hidden cube under floor
+    commands.spawn((
+        Mesh3d(cube.clone()),
+        MeshMaterial3d(red_material.clone()),
+        Transform {
+            translation: Vec3::new(3.0, -2.0, 0.0),
+            rotation: Quat::from_euler(EulerRot::YXZEx, FRAC_PI_4, FRAC_PI_4, 0.0),
+            ..default()
+        },
+    ));
 }
