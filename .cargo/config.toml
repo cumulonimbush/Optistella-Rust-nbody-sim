@@ -1,0 +1,7 @@
+[alias]
+xwinb = "xwin build --target x86_64-pc-windows-msvc"
+xrun = ['exec', '-s', 'cargo xwinb && cp -r assets target/x86_64-pc-windows-msvc/debug && ./target/x86_64-pc-windows-msvc/debug/*.exe']
+xrel = "xwin build --target x86_64-pc-windows-msvc --release"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
