@@ -4,19 +4,31 @@ use bevy::{
     post_process::bloom::Bloom,
     // window::{CursorGrabMode, CursorOptions},
     prelude::*,
+    window::WindowMode,
 };
+
+mod config;
+mod star;
+use star::*;
 
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::BLACK))
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                resizable: false,
+                mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins(FreeCameraPlugin)
         // .add_plugins(CursorGrab)
-        .add_systems(Startup, (setup, spawn_lights, spawn_world))
+        .add_systems(Startup, (setup_camera, spawn_lights, spawn_barns))
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::X, Vec3::Y),
@@ -25,8 +37,8 @@ fn setup(mut commands: Commands) {
         FreeCamera {
             sensitivity: 0.2,
             friction: 25.0,
-            walk_speed: 3.0,
-            run_speed: 9.0,
+            walk_speed: 30.0,
+            run_speed: 90.0,
             key_up: KeyCode::Space,
             key_down: KeyCode::ShiftLeft,
             key_run: KeyCode::ControlLeft,
@@ -45,24 +57,5 @@ fn spawn_lights(mut commands: Commands) {
             affects_lightmapped_meshes: false,
         },
         Transform::from_xyz(0.0, 2.0, 0.0),
-    ));
-}
-
-fn spawn_world(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    let emissive_1 = materials.add(StandardMaterial {
-        emissive: LinearRgba::rgb(0.0, 0.0, 150.0),
-        ..default()
-    });
-
-    let sphere = meshes.add(Sphere::new(0.4).mesh().ico(5).unwrap());
-
-    commands.spawn((
-        Mesh3d(sphere.clone()),
-        MeshMaterial3d(emissive_1),
-        Transform::from_xyz(1.0, 0.0, 1.0),
     ));
 }
