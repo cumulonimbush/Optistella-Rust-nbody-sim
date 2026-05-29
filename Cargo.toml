@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bevy = {version = "0.18.1", features = ["free_camera"]}
 rand = "0.10.1"
+glam = "0.30"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
