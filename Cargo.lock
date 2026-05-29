@@ -351,6 +351,7 @@ name = "bevy-deneme"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "glam",
  "rand 0.10.1",
 ]
 
