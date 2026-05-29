@@ -6,10 +6,12 @@ use bevy::{
     window::WindowMode,
 };
 use rand::RngExt;
-use std::collections::HashMap;
+
+use crate::config::*;
 
 mod body;
 mod octree;
+mod config;
 
 #[derive(Component, Debug)]
 pub struct Position(pub Vec3);
@@ -36,7 +38,7 @@ fn main() {
         }))
         .add_plugins(FreeCameraPlugin)
         .add_systems(Startup, (setup_camera, spawn_lights, spawn_bodies))
-        .add_systems(Update, (update_physics)
+        .add_systems(Update, update_physics)
         .run();
 }
 
@@ -80,22 +82,23 @@ fn spawn_bodies(
     let mut rng = rand::rng();
 
     // Spawn 500 spheres
-    let sphere_mesh = meshes.add(Sphere::new(0.4).mesh().ico(4).unwrap());
+    let sphere_mesh = meshes.add(Sphere::new(BODY_MESH_RADIUS).mesh().ico(4).unwrap());
 
-    for _ in 0..500 {
+    for _ in 0..BODY_COUNT {
         let pos = Vec3::new(
-            rng.random_range(-60.0..60.0),
-            rng.random_range(-60.0..60.0),
-            rng.random_range(-60.0..60.0),
+            rng.random_range(-BODY_POS_RANGE..BODY_POS_RANGE),
+            rng.random_range(-BODY_POS_RANGE..BODY_POS_RANGE),
+            rng.random_range(-BODY_POS_RANGE..BODY_POS_RANGE),
         );
         // Orbital-like velocities or random expansion velocities
         let vel = Vec3::new(
-            rng.random_range(-15.0..15.0),
-            rng.random_range(-15.0..15.0),
-            rng.random_range(-15.0..15.0),
+            rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+            rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+            rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
         );
-        let mass: f32 = rng.random_range(10.0..1000.0);
-        let radius = 0.4;
+        let mass: f32 = rng.random_range(BODY_MASS_RANGE[0]..BODY_MASS_RANGE[1]);
+        // Recycle mesh radius as object radius
+        let radius = BODY_MESH_RADIUS;
 
         // harmonized color based on mass (heavier bodies are hotter/brighter)
         let intensity = (mass / 1000.0).clamp(0.1, 1.0);
@@ -129,9 +132,9 @@ fn update_physics(
     let dt = time.delta_secs().min(0.03); // Cap dt to avoid large time step instability
 
     // Gather active body data to construct the Octree
-    let mut bodies = Vec::with_capacity(500);
+    let mut bodies = Vec::with_capacity(BODY_COUNT as usize);
     for (pos, vel, mass, _) in query.iter() {
-        bodies.push(body::Body::new(pos.0, vel.0, mass.0, 0.4));
+        bodies.push(body::Body::new(pos.0, vel.0, mass.0, BODY_MESH_RADIUS));
     }
 
     if bodies.is_empty() {
