@@ -6,7 +6,7 @@ use bevy::{
     window::WindowMode,
 };
 use rand::RngExt;
-
+use std::collections::HashMap;
 use crate::config::*;
 
 mod body;
@@ -38,7 +38,7 @@ fn main() {
         }))
         .add_plugins(FreeCameraPlugin)
         .add_systems(Startup, (setup_camera, spawn_lights, spawn_bodies))
-        .add_systems(Update, update_physics)
+        .add_systems(Update, (update_physics, handle_acceleration).chain())
         .run();
 }
 
@@ -159,5 +159,117 @@ fn update_physics(
         vel.0 += acc * dt;
         pos.0 += vel.0 * dt;
         transform.translation = pos.0;
+    }
+}
+
+fn handle_acceleration(
+    mut commands: Commands,
+    mut query: Query<(
+        Entity,
+        &mut Position,
+        &mut Velocity,
+        &mut Mass,
+        &mut Radius,
+        &mut Transform,
+    )>,
+) {
+    // Copy all entity data to a temporary vector for reading. (No Borrow checker)
+    let mut bodies = Vec::new();
+    for (entity, pos, vel, mass, radius, _) in query.iter() {
+        bodies.push((entity, pos.0, vel.0, mass.0, radius.0));
+    }
+
+    let n = bodies.len();
+    if n < 2 {
+        return;
+    }
+
+    // Union-Find series: Everyone is initially their own parent.
+    let mut parent = (0..n).collect::<Vec<usize>>();
+
+    // Union-Find yhelper func
+    fn find(i: usize, parent: &mut Vec<usize>) -> usize {
+        if parent[i] == i {
+            i
+        } else {
+            let root = find(parent[i], parent);
+            parent[i] = root; // Path compression
+            root
+        }
+    }
+
+    // Find intersections and merge sets.
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let p1 = bodies[i].1;
+            let p2 = bodies[j].1;
+            let r1 = bodies[i].4;
+            let r2 = bodies[j].4;
+
+            let d_sq = (p1 - p2).length_squared();
+            let r_sum = r1 + r2;
+
+            if d_sq < r_sum * r_sum {
+                let root_i = find(i, &mut parent);
+                let root_j = find(j, &mut parent);
+                if root_i != root_j {
+                    // Make the heavier object (or the one with the smaller index) the root.
+                    if bodies[root_i].3 >= bodies[root_j].3 {
+                        parent[root_j] = root_i;
+                    } else {
+                        parent[root_i] = root_j;
+                    }
+                }
+            }
+        }
+    }
+
+    // Calculation of the total mass and momentum of the clusters.
+    // Key: Root Index, Value: (Total Mass, Total Momentum (Mass * Vel), Center of Mass (Mass * Pos))
+    let mut cluster_data: HashMap<usize, (f32, Vec3, Vec3)> = HashMap::new();
+
+    for i in 0..n {
+        let root = find(i, &mut parent);
+        let mass = bodies[i].3;
+        let pos = bodies[i].1;
+        let vel = bodies[i].2;
+
+        let momentum = vel * mass;
+        let weighted_pos = pos * mass;
+
+        let entry = cluster_data
+            .entry(root)
+            .or_insert((0.0, Vec3::ZERO, Vec3::ZERO));
+        entry.0 += mass;
+        entry.1 += momentum;
+        entry.2 += weighted_pos;
+    }
+
+    for i in 0..n {
+        let root = find(i, &mut parent);
+        let entity = bodies[i].0;
+
+        if i != root {
+            commands.entity(entity).despawn();
+        } else if let Some(&(total_mass, total_momentum, total_weighted_pos)) =
+            cluster_data.get(&root)
+        {
+            if total_mass > bodies[i].3 {
+                if let Ok((_, mut p, mut v, mut m, mut r, mut t)) = query.get_mut(entity) {
+                    let new_vel = total_momentum / total_mass;
+                    let new_pos = total_weighted_pos / total_mass;
+                    let volume_factor = total_mass / 100.0;
+                    let new_radius = volume_factor.cbrt().max(0.4);
+
+                    p.0 = new_pos;
+                    v.0 = new_vel;
+                    m.0 = total_mass;
+                    r.0 = new_radius;
+
+                    t.translation = new_pos;
+                    t.scale = Vec3::splat(new_radius / 0.4);
+                }
+            }
+        }
     }
 }
