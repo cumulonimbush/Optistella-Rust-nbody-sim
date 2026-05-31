@@ -169,10 +169,27 @@ fn spawn_bodies(
     }
 }
 
+#[inline]
+fn expand_bits(v: u32) -> u64 {
+    let mut x = v as u64 & 0x00000000001fffff;
+    x = (x | (x << 32)) & 0x001f00000000ffff;
+    x = (x | (x << 16)) & 0x001f0000ff0000ff;
+    x = (x | (x << 8))  & 0x010f00f00f00f00f;
+    x = (x | (x << 4))  & 0x10c30c30c30c30c3;
+    x = (x | (x << 2))  & 0x1249249249249249;
+    x
+}
+
+#[inline]
+fn morton_3d(x: u32, y: u32, z: u32) -> u64 {
+    (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z)
+}
+
 fn update_physics(
     time: Res<Time>,
     mut local_octree: Local<Option<octree::Octree>>,
     mut local_bodies: Local<Vec<body::Body>>,
+    mut local_morton: Local<Vec<(u64, body::Body)>>,
     mut query: Query<(&mut Position, &mut Velocity, &Mass, &mut Transform)>,
 ) {
     let dt = time.delta_secs().min(0.03); // Cap dt to avoid large time step instability
@@ -196,6 +213,34 @@ fn update_physics(
 
     // Build standard Bounds3D containing all active bodies
     let bounds = octree::Bounds3D::new_containing(bodies);
+
+    // Cache-friendly Z-Order sorting (Morton Encoding)
+    let min_coord = bounds.center - Vec3::splat(bounds.size * 0.5);
+    let range = bounds.size;
+
+    let morton_vec = &mut *local_morton;
+    morton_vec.clear();
+    for body in bodies.iter() {
+        let norm = if range > 0.0 {
+            (body.pos - min_coord) / range
+        } else {
+            Vec3::ZERO
+        };
+        let ux = (norm.x.clamp(0.0, 1.0) * 2097151.0) as u32;
+        let uy = (norm.y.clamp(0.0, 1.0) * 2097151.0) as u32;
+        let uz = (norm.z.clamp(0.0, 1.0) * 2097151.0) as u32;
+        let code = morton_3d(ux, uy, uz);
+        morton_vec.push((code, *body));
+    }
+
+    // Sort bodies by their Morton codes
+    morton_vec.sort_unstable_by_key(|&(code, _)| code);
+
+    // Re-populate bodies in sorted order
+    bodies.clear();
+    for (_, body) in morton_vec.iter() {
+        bodies.push(*body);
+    }
 
     octree.clear(bounds);
 
