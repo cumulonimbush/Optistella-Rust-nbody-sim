@@ -159,12 +159,21 @@ fn spawn_bodies(
 
 fn update_physics(
     time: Res<Time>,
+    mut local_octree: Local<Option<octree::Octree>>,
+    mut local_bodies: Local<Vec<body::Body>>,
     mut query: Query<(&mut Position, &mut Velocity, &Mass, &mut Transform)>,
 ) {
     let dt = time.delta_secs().min(0.03); // Cap dt to avoid large time step instability
 
+    // Eğer octree ilk defa çalışıyorsa yarat
+    if local_octree.is_none() {
+        *local_octree = Some(octree::Octree::new(0.5, 2.0));
+    }
+    let octree = local_octree.as_mut().unwrap();
+
     // Gather active body data to construct the Octree
-    let mut bodies = Vec::with_capacity(BODY_COUNT as usize);
+    let bodies = &mut *local_bodies;
+    bodies.clear();
     for (pos, vel, mass, _) in query.iter() {
         bodies.push(body::Body::new(pos.0, vel.0, mass.0, BODY_MESH_RADIUS));
     }
@@ -174,13 +183,11 @@ fn update_physics(
     }
 
     // Build standard Bounds3D containing all active bodies
-    let bounds = octree::Bounds3D::new_containing(&bodies);
+    let bounds = octree::Bounds3D::new_containing(bodies);
 
-    // Theta = 0.5 for Barnes-Hut accuracy, Epsilon = 2.0 for soft potential (no infinite acceleration)
-    let mut octree = octree::Octree::new(0.5, 2.0);
     octree.clear(bounds);
 
-    for body in &bodies {
+    for body in bodies.iter() {
         octree.insert(body.pos, body.mass);
     }
     octree.propagate();
@@ -194,6 +201,15 @@ fn update_physics(
     }
 }
 
+#[derive(Default)]
+struct AccelerationCache {
+    bodies: Vec<(Entity, Vec3, Vec3, f32, f32)>,
+    parent: Vec<usize>,
+    grid: HashMap<(i32, i32, i32), Vec<usize>>,
+    pool: Vec<Vec<usize>>,
+    cluster_data: HashMap<usize, (f32, Vec3, Vec3)>,
+}
+
 fn handle_acceleration(
     mut commands: Commands,
     mut query: Query<(
@@ -204,9 +220,12 @@ fn handle_acceleration(
         &mut Radius,
         &mut Transform,
     )>,
+    mut cache: Local<AccelerationCache>,
 ) {
+    let cache = &mut *cache;
     // Copy all entity data to a temporary vector for reading. (No Borrow checker)
-    let mut bodies = Vec::new();
+    let bodies = &mut cache.bodies;
+    bodies.clear();
     for (entity, pos, vel, mass, radius, _) in query.iter() {
         bodies.push((entity, pos.0, vel.0, mass.0, radius.0));
     }
@@ -217,10 +236,14 @@ fn handle_acceleration(
     }
 
     // Union-Find series: Everyone is initially their own parent.
-    let mut parent = (0..n).collect::<Vec<usize>>();
+    let parent = &mut cache.parent;
+    parent.clear();
+    for i in 0..n {
+        parent.push(i);
+    }
 
-    // Union-Find yhelper func
-    fn find(i: usize, parent: &mut Vec<usize>) -> usize {
+    // Union-Find helper func
+    fn find(i: usize, parent: &mut [usize]) -> usize {
         if parent[i] == i {
             i
         } else {
@@ -234,7 +257,10 @@ fn handle_acceleration(
 
     // The cell size must be greater than the sum of the expected maximum radii.
     let cell_size = 10.0;
-    let mut grid: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
+
+    // Split mutable borrows of cache fields to satisfy borrow checker
+    let grid = &mut cache.grid;
+    let pool = &mut cache.pool;
 
     // Place all bodies into the Hash Grid O(N)
     for i in 0..n {
@@ -244,7 +270,10 @@ fn handle_acceleration(
             (p.y / cell_size).floor() as i32,
             (p.z / cell_size).floor() as i32,
         );
-        grid.entry(cell).or_default().push(i);
+        let vec = grid
+            .entry(cell)
+            .or_insert_with(|| pool.pop().unwrap_or_else(|| Vec::with_capacity(16)));
+        vec.push(i);
     }
 
     // Only check 27 neighboring cells for intersection O(N)
@@ -276,8 +305,8 @@ fn handle_acceleration(
                             let r_sum = r1 + r2;
 
                             if d_sq < r_sum * r_sum {
-                                let root_i = find(i, &mut parent);
-                                let root_j = find(j, &mut parent);
+                                let root_i = find(i, parent);
+                                let root_j = find(j, parent);
                                 if root_i != root_j {
                                     if bodies[root_i].3 >= bodies[root_j].3 {
                                         parent[root_j] = root_i;
@@ -296,10 +325,11 @@ fn handle_acceleration(
 
     // Calculation of the total mass and momentum of the clusters.
     // Key: Root Index, Value: (Total Mass, Total Momentum (Mass * Vel), Center of Mass (Mass * Pos))
-    let mut cluster_data: HashMap<usize, (f32, Vec3, Vec3)> = HashMap::new();
+    let cluster_data = &mut cache.cluster_data;
+    cluster_data.clear();
 
     for i in 0..n {
-        let root = find(i, &mut parent);
+        let root = find(i, parent);
         let mass = bodies[i].3;
         let pos = bodies[i].1;
         let vel = bodies[i].2;
@@ -316,7 +346,7 @@ fn handle_acceleration(
     }
 
     for i in 0..n {
-        let root = find(i, &mut parent);
+        let root = find(i, parent);
         let entity = bodies[i].0;
 
         if i != root {
@@ -341,5 +371,11 @@ fn handle_acceleration(
                 }
             }
         }
+    }
+
+    // Drain grid to reuse Vecs and clear the hash map
+    for (_, mut vec) in grid.drain() {
+        vec.clear();
+        pool.push(vec);
     }
 }
