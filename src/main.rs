@@ -219,31 +219,69 @@ fn handle_acceleration(
         }
     }
 
-    // Find intersections and merge sets.
+    // --- SPATIAL HASHING ---
+
+    // The cell size must be greater than the sum of the expected maximum radii.
+    let cell_size = 10.0;
+    let mut grid: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
+
+    // Place all bodies into the Hash Grid O(N)
     for i in 0..n {
-        for j in (i + 1)..n {
-            let p1 = bodies[i].1;
-            let p2 = bodies[j].1;
-            let r1 = bodies[i].4;
-            let r2 = bodies[j].4;
+        let p = bodies[i].1;
+        let cell = (
+            (p.x / cell_size).floor() as i32,
+            (p.y / cell_size).floor() as i32,
+            (p.z / cell_size).floor() as i32,
+        );
+        grid.entry(cell).or_default().push(i);
+    }
 
-            let d_sq = (p1 - p2).length_squared();
-            let r_sum = r1 + r2;
+    // Only check 27 neighboring cells for intersection O(N)
+    for i in 0..n {
+        let p1 = bodies[i].1;
+        let r1 = bodies[i].4;
 
-            if d_sq < r_sum * r_sum {
-                let root_i = find(i, &mut parent);
-                let root_j = find(j, &mut parent);
-                if root_i != root_j {
-                    // Make the heavier object (or the one with the smaller index) the root.
-                    if bodies[root_i].3 >= bodies[root_j].3 {
-                        parent[root_j] = root_i;
-                    } else {
-                        parent[root_i] = root_j;
+        let cell_x = (p1.x / cell_size).floor() as i32;
+        let cell_y = (p1.y / cell_size).floor() as i32;
+        let cell_z = (p1.z / cell_size).floor() as i32;
+
+        // Check your own cell and 26 neighboring cells
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let neighbor_cell = (cell_x + dx, cell_y + dy, cell_z + dz);
+
+                    if let Some(neighbors) = grid.get(&neighbor_cell) {
+                        for &j in neighbors {
+                            // i >= j check prevents checking the same pair (A-B and B-A) twice or checking the object itself (A-A).
+                            if i >= j {
+                                continue;
+                            }
+
+                            let p2 = bodies[j].1;
+                            let r2 = bodies[j].4;
+
+                            let d_sq = (p1 - p2).length_squared();
+                            let r_sum = r1 + r2;
+
+                            if d_sq < r_sum * r_sum {
+                                let root_i = find(i, &mut parent);
+                                let root_j = find(j, &mut parent);
+                                if root_i != root_j {
+                                    if bodies[root_i].3 >= bodies[root_j].3 {
+                                        parent[root_j] = root_i;
+                                    } else {
+                                        parent[root_i] = root_j;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+    // --- SPATIAL HASHING BİTİŞ ---
 
     // Calculation of the total mass and momentum of the clusters.
     // Key: Root Index, Value: (Total Mass, Total Momentum (Mass * Vel), Center of Mass (Mass * Pos))
