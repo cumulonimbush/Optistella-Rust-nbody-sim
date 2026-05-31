@@ -1,3 +1,4 @@
+use crate::config::*;
 use bevy::{
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     core_pipeline::tonemapping::Tonemapping,
@@ -8,11 +9,10 @@ use bevy::{
 use rand::RngExt;
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use crate::config::*;
 
 mod body;
-mod octree;
 mod config;
+mod octree;
 
 #[derive(Component, Debug)]
 pub struct Position(pub Vec3);
@@ -84,6 +84,8 @@ fn spawn_bodies(
     let mut rng = rand::rng();
     time.set_relative_speed(SIMULATION_SPEED_FACTOR);
 
+    let base_mesh = meshes.add(Sphere::new(1.0).mesh().ico(4).unwrap());
+
     // Spawn 500 spheres
     for _ in 0..BODY_COUNT {
         // let pos = Vec3::new(
@@ -97,11 +99,7 @@ fn spawn_bodies(
         let dist = rng.random_range(0.0..BODY_POS_RANGE);
         let (sint, cost) = theta.sin_cos();
         let (sinp, cosp) = phi.sin_cos();
-        let pos = Vec3::new(
-            dist*sinp*cost,
-            dist*sinp*sint,
-            dist*cosp
-        );
+        let pos = Vec3::new(dist * sinp * cost, dist * sinp * sint, dist * cosp);
 
         // Orbital-like velocities or random expansion velocities
         let vel = Vec3::new(
@@ -114,18 +112,19 @@ fn spawn_bodies(
         // harmonized color based on mass (heavier bodies are hotter/brighter)
         let intensity = (mass / 1000.0).clamp(0.1, 1.0);
         let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
-        let mut emissive_color:LinearRgba = LinearRgba::rgb(120.0/intensity, 55.0/intensity, intensity * 20.0);
+        let mut emissive_color: LinearRgba =
+            LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
         if intensity > 0.98 {
             emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
         } else if intensity > 0.8 {
-            emissive_color = LinearRgba::rgb(25.0/intensity, 5.0*intensity, intensity * 200.0);
+            emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
         } else if intensity < 0.12 {
-            emissive_color = LinearRgba::rgb(100.0/intensity, 25.0*intensity, intensity * 200.0);
+            emissive_color =
+                LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
         }
 
         // Recycle mesh radius as object radius
         let radius = (BODY_MESH_RADIUS * intensity.powi(3) * 8.0).max(BODY_MESH_RADIUS);
-        let sphere_mesh = meshes.add(Sphere::new(radius).mesh().ico(4).unwrap());
 
         let sphere_material = materials.add(StandardMaterial {
             base_color: color,
@@ -136,9 +135,9 @@ fn spawn_bodies(
         });
 
         commands.spawn((
-            Mesh3d(sphere_mesh.clone()),
+            Mesh3d(base_mesh.clone()),
             MeshMaterial3d(sphere_material),
-            Transform::from_translation(pos),
+            Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
             Position(pos),
             Velocity(vel),
             Mass(mass),
