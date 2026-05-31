@@ -1,5 +1,5 @@
 pub static BODY_MESH_RADIUS: f32 = 0.4;
-pub static BODY_COUNT: i32 = 40000;
+pub static BODY_COUNT: i32 = 20000;
 pub static BODY_VEL_RANGE: f32 = 0.0;
 pub static BODY_POS_RANGE: f32 = 2000.0;
 pub static BODY_MASS_RANGE: [f32; 2] = [10.0, 1000.0];

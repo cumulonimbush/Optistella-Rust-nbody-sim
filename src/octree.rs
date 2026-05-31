@@ -216,8 +216,9 @@ impl Octree {
 
             if n.is_leaf() || n.bounds.size * n.bounds.size < d_sq * self.t_sq {
                 if d_sq > 0.0 {
-                    let denom = (d_sq + self.e_sq) * d_sq.sqrt();
-                    acc += d * (n.mass / denom).min(f32::MAX);
+                    let inv_d = d_sq.sqrt().recip();
+                    let inv_denom = (d_sq + self.e_sq).recip() * inv_d;
+                    acc += d * (n.mass * inv_denom).min(f32::MAX);
                 }
 
                 if n.next == 0 {
