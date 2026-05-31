@@ -86,14 +86,38 @@ fn spawn_bodies(
 
     let base_mesh = meshes.add(Sphere::new(1.0).mesh().ico(4).unwrap());
 
-    // Spawn 500 spheres
-    for _ in 0..BODY_COUNT {
-        // let pos = Vec3::new(
-        //     rng.random_range(-BODY_POS_RANGE..BODY_POS_RANGE),
-        //     rng.random_range(-BODY_POS_RANGE..BODY_POS_RANGE),
-        //     rng.random_range(-BODY_POS_RANGE..BODY_POS_RANGE),
-        // );
+    // Pre-built material pool (palette)
+    // Only these 256 materials will be sent to the GPU, thousands of objects will share them.
+    let palette_size = 256;
+    let mut material_palette = Vec::with_capacity(palette_size);
+    for i in 0..palette_size {
+        // Convert i (0..255) value to intensity (0.1..1.0) range
+        let t = i as f32 / (palette_size - 1) as f32;
+        let intensity = 0.1 + t * 0.9;
 
+        let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
+        let mut emissive_color: LinearRgba =
+            LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
+        if intensity > 0.98 {
+            emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
+        } else if intensity > 0.8 {
+            emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
+        } else if intensity < 0.12 {
+            emissive_color =
+                LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
+        }
+
+        material_palette.push(materials.add(StandardMaterial {
+            base_color: color,
+            emissive: emissive_color,
+            metallic: 0.2,
+            perceptual_roughness: 0.5,
+            ..default()
+        }));
+    }
+
+    // Spawn the Objects
+    for _ in 0..BODY_COUNT {
         let theta = rng.random_range(0.0..2.0) * PI;
         let phi = rng.random_range(0.0..1.0) * PI;
         let dist = rng.random_range(0.0..BODY_POS_RANGE);
@@ -111,28 +135,15 @@ fn spawn_bodies(
 
         // harmonized color based on mass (heavier bodies are hotter/brighter)
         let intensity = (mass / 1000.0).clamp(0.1, 1.0);
-        let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
-        let mut emissive_color: LinearRgba =
-            LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
-        if intensity > 0.98 {
-            emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
-        } else if intensity > 0.8 {
-            emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
-        } else if intensity < 0.12 {
-            emissive_color =
-                LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
-        }
+
+        // Convert Intensity value to pool index in [0, 255] range
+        let t = (intensity - 0.1) / 0.9;
+        let palette_index =
+            ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
+        let sphere_material = material_palette[palette_index].clone();
 
         // Recycle mesh radius as object radius
         let radius = (BODY_MESH_RADIUS * intensity.powi(3) * 8.0).max(BODY_MESH_RADIUS);
-
-        let sphere_material = materials.add(StandardMaterial {
-            base_color: color,
-            emissive: emissive_color,
-            metallic: 0.2,
-            perceptual_roughness: 0.5,
-            ..default()
-        });
 
         commands.spawn((
             Mesh3d(base_mesh.clone()),
