@@ -120,18 +120,30 @@ fn spawn_bodies(
     for _ in 0..BODY_COUNT {
         let theta = rng.random_range(0.0..2.0) * PI;
         let phi = rng.random_range(0.0..1.0) * PI;
-        let dist = rng.random_range(0.0..BODY_POS_RANGE);
+        let dist = if BODY_POS_RANGE > 0.0 {
+            rng.random_range(0.0..BODY_POS_RANGE)
+        } else {
+            0.0
+        };
         let (sint, cost) = theta.sin_cos();
         let (sinp, cosp) = phi.sin_cos();
         let pos = Vec3::new(dist * sinp * cost, dist * sinp * sint, dist * cosp);
 
         // Orbital-like velocities or random expansion velocities
-        let vel = Vec3::new(
-            rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-            rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-            rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-        );
-        let mass: f32 = rng.random_range(BODY_MASS_RANGE[0]..BODY_MASS_RANGE[1]);
+        let vel = if BODY_VEL_RANGE > 0.0 {
+            Vec3::new(
+                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+            )
+        } else {
+            Vec3::ZERO
+        };
+        let mass: f32 = if BODY_MASS_RANGE[0] < BODY_MASS_RANGE[1] {
+            rng.random_range(BODY_MASS_RANGE[0]..BODY_MASS_RANGE[1])
+        } else {
+            BODY_MASS_RANGE[0]
+        };
 
         // harmonized color based on mass (heavier bodies are hotter/brighter)
         let intensity = (mass / 1000.0).clamp(0.1, 1.0);
@@ -192,22 +204,46 @@ fn update_physics(
     }
     octree.propagate();
 
-    // Apply acceleration calculated from Octree
-    for (mut pos, mut vel, _mass, mut transform) in query.iter_mut() {
-        let acc = octree.acc(pos.0);
-        vel.0 += acc * dt;
-        pos.0 += vel.0 * dt;
-        transform.translation = pos.0;
-    }
+    // Apply acceleration calculated from Octree (MULTITHREADED)
+    let octree_ref = &*octree;
+    query
+        .par_iter_mut()
+        .for_each(|(mut pos, mut vel, _mass, mut transform)| {
+            let acc = octree_ref.acc(pos.0);
+            vel.0 += acc * dt;
+            pos.0 += vel.0 * dt;
+            transform.translation = pos.0;
+        });
 }
 
-#[derive(Default)]
+const HASH_SIZE: usize = 131072;
+
+#[inline]
+fn hash_cell(cell: (i32, i32, i32)) -> usize {
+    let x = cell.0 as u32;
+    let y = cell.1 as u32;
+    let z = cell.2 as u32;
+    (x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663) ^ z.wrapping_mul(83492791)) as usize
+}
+
 struct AccelerationCache {
-    bodies: Vec<(Entity, Vec3, Vec3, f32, f32)>,
+    bodies: Vec<(Entity, Vec3, Vec3, f32, f32, (i32, i32, i32))>,
     parent: Vec<usize>,
-    grid: HashMap<(i32, i32, i32), Vec<usize>>,
-    pool: Vec<Vec<usize>>,
+    head: Vec<usize>,
+    next: Vec<usize>,
     cluster_data: HashMap<usize, (f32, Vec3, Vec3)>,
+}
+
+impl Default for AccelerationCache {
+    fn default() -> Self {
+        Self {
+            bodies: Vec::new(),
+            parent: Vec::new(),
+            head: vec![usize::MAX; HASH_SIZE],
+            next: Vec::new(),
+            cluster_data: HashMap::new(),
+        }
+    }
 }
 
 fn handle_acceleration(
@@ -223,11 +259,20 @@ fn handle_acceleration(
     mut cache: Local<AccelerationCache>,
 ) {
     let cache = &mut *cache;
-    // Copy all entity data to a temporary vector for reading. (No Borrow checker)
+
+    // The cell size must be greater than the sum of the expected maximum radii.
+    let cell_size = 10.0;
+
+    // Copy all entity data to a temporary vector for reading and precompute cells.
     let bodies = &mut cache.bodies;
     bodies.clear();
     for (entity, pos, vel, mass, radius, _) in query.iter() {
-        bodies.push((entity, pos.0, vel.0, mass.0, radius.0));
+        let cell = (
+            (pos.0.x / cell_size).floor() as i32,
+            (pos.0.y / cell_size).floor() as i32,
+            (pos.0.z / cell_size).floor() as i32,
+        );
+        bodies.push((entity, pos.0, vel.0, mass.0, radius.0, cell));
     }
 
     let n = bodies.len();
@@ -253,69 +298,69 @@ fn handle_acceleration(
         }
     }
 
-    // --- SPATIAL HASHING ---
+    // --- SPATIAL HASHING (FLAT ARRAY / LINKED LIST GRID) ---
 
-    // The cell size must be greater than the sum of the expected maximum radii.
-    let cell_size = 10.0;
+    // Reset head array
+    let head = &mut cache.head;
+    head.fill(usize::MAX);
 
-    // Split mutable borrows of cache fields to satisfy borrow checker
-    let grid = &mut cache.grid;
-    let pool = &mut cache.pool;
+    // Resize next array to fit current n elements
+    let next = &mut cache.next;
+    next.clear();
+    next.resize(n, usize::MAX);
 
-    // Place all bodies into the Hash Grid O(N)
+    // Place all bodies into the Flat Array Hash Grid O(N)
     for i in 0..n {
-        let p = bodies[i].1;
-        let cell = (
-            (p.x / cell_size).floor() as i32,
-            (p.y / cell_size).floor() as i32,
-            (p.z / cell_size).floor() as i32,
-        );
-        let vec = grid
-            .entry(cell)
-            .or_insert_with(|| pool.pop().unwrap_or_else(|| Vec::with_capacity(16)));
-        vec.push(i);
+        let cell = bodies[i].5;
+        let hash_idx = hash_cell(cell) & (HASH_SIZE - 1);
+        next[i] = head[hash_idx];
+        head[hash_idx] = i;
     }
 
     // Only check 27 neighboring cells for intersection O(N)
     for i in 0..n {
         let p1 = bodies[i].1;
         let r1 = bodies[i].4;
+        let cell = bodies[i].5;
 
-        let cell_x = (p1.x / cell_size).floor() as i32;
-        let cell_y = (p1.y / cell_size).floor() as i32;
-        let cell_z = (p1.z / cell_size).floor() as i32;
+        let cell_x = cell.0;
+        let cell_y = cell.1;
+        let cell_z = cell.2;
 
         // Check your own cell and 26 neighboring cells
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let neighbor_cell = (cell_x + dx, cell_y + dy, cell_z + dz);
+                    let hash_idx = hash_cell(neighbor_cell) & (HASH_SIZE - 1);
 
-                    if let Some(neighbors) = grid.get(&neighbor_cell) {
-                        for &j in neighbors {
-                            // i >= j check prevents checking the same pair (A-B and B-A) twice or checking the object itself (A-A).
-                            if i >= j {
-                                continue;
-                            }
+                    let mut j = head[hash_idx];
+                    while j != usize::MAX {
+                        // Prevent checking duplicate pairs or self-checking
+                        if i < j {
+                            let cell_j = bodies[j].5;
+                            // Resolve hash collisions: make sure body j is in the exact neighbor cell we are querying
+                            if cell_j == neighbor_cell {
+                                let p2 = bodies[j].1;
+                                let r2 = bodies[j].4;
 
-                            let p2 = bodies[j].1;
-                            let r2 = bodies[j].4;
+                                let d_sq = (p1 - p2).length_squared();
+                                let r_sum = r1 + r2;
 
-                            let d_sq = (p1 - p2).length_squared();
-                            let r_sum = r1 + r2;
-
-                            if d_sq < r_sum * r_sum {
-                                let root_i = find(i, parent);
-                                let root_j = find(j, parent);
-                                if root_i != root_j {
-                                    if bodies[root_i].3 >= bodies[root_j].3 {
-                                        parent[root_j] = root_i;
-                                    } else {
-                                        parent[root_i] = root_j;
+                                if d_sq < r_sum * r_sum {
+                                    let root_i = find(i, parent);
+                                    let root_j = find(j, parent);
+                                    if root_i != root_j {
+                                        if bodies[root_i].3 >= bodies[root_j].3 {
+                                            parent[root_j] = root_i;
+                                        } else {
+                                            parent[root_i] = root_j;
+                                        }
                                     }
                                 }
                             }
                         }
+                        j = next[j];
                     }
                 }
             }
@@ -371,11 +416,5 @@ fn handle_acceleration(
                 }
             }
         }
-    }
-
-    // Drain grid to reuse Vecs and clear the hash map
-    for (_, mut vec) in grid.drain() {
-        vec.clear();
-        pool.push(vec);
     }
 }
