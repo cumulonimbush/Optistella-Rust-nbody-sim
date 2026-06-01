@@ -197,13 +197,13 @@ fn update_physics(
     let bounds = octree::Bounds3D::new_containing(bodies);
     octree.clear(bounds);
 
-    // 1. Zirve Performanslı Tek Çekirdek İnşa (Eski 90 FPS'lik yöntem)
+    // Single Core Build
     for body in bodies.iter() {
         octree.insert(body.pos, body.mass);
     }
     octree.propagate();
 
-    // 2. Rayon ile Paralel Kütleçekim Hesabı (Gerçek Multithreading gücü)
+    // Rayon Parallel Gravity Calculation
     let octree_ref = &*octree;
     query
         .par_iter_mut()
@@ -259,12 +259,12 @@ fn handle_acceleration(
 ) {
     let cache = &mut *cache;
 
-    // 1. DİNAMİK HÜCRE BOYUTU HESAPLAMA (TUNNELING ENGELLEYİCİ)
+    // Dynamic Cell size calculation (TUNNELING PREVENTION)
     let mut max_radius = 0.0f32;
     for (_, _, _, _, radius, _) in query.iter() {
         max_radius = max_radius.max(radius.0);
     }
-    // En büyük yarıçapın 2.2 katı veya minimum 10.0 (Büyük objeler hücre atlamaz)
+    // Max radius 2.2 or minimum 10.0 (Large objects do not skip cells)
     let cell_size = (max_radius * 2.2).max(10.0);
 
     // Copy all entity data to a temporary vector for reading and precompute cells.
