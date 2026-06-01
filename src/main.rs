@@ -256,28 +256,28 @@ fn handle_acceleration(
         &mut Transform,
     )>,
     mut cache: Local<AccelerationCache>,
+    mut prev_max_radius: Local<f32>,
 ) {
     let cache = &mut *cache;
 
-    // Dynamic Cell size calculation (TUNNELING PREVENTION)
-    let mut max_radius = 0.0f32;
-    for (_, _, _, _, radius, _) in query.iter() {
-        max_radius = max_radius.max(radius.0);
-    }
-    // Max radius 2.2 or minimum 10.0 (Large objects do not skip cells)
-    let cell_size = (max_radius * 2.2).max(10.0);
+    // Dynamic Cell size calculation (TUNNELING PREVENTION) using previous frame's max radius
+    let cell_size = (*prev_max_radius * 2.2).max(10.0);
 
     // Copy all entity data to a temporary vector for reading and precompute cells.
     let bodies = &mut cache.bodies;
     bodies.clear();
+    let mut next_max_radius = 0.0f32;
     for (entity, pos, vel, mass, radius, _) in query.iter() {
+        let r = radius.0;
+        next_max_radius = next_max_radius.max(r);
         let cell = (
             (pos.0.x / cell_size).floor() as i32,
             (pos.0.y / cell_size).floor() as i32,
             (pos.0.z / cell_size).floor() as i32,
         );
-        bodies.push((entity, pos.0, vel.0, mass.0, radius.0, cell));
+        bodies.push((entity, pos.0, vel.0, mass.0, r, cell));
     }
+    *prev_max_radius = next_max_radius;
 
     let n = bodies.len();
     if n < 2 {
