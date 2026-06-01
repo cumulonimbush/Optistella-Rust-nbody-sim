@@ -150,53 +150,69 @@ fn spawn_lights(mut commands: Commands) {
     ));
 }
 
-fn spawn_bodies(
+fn init_population(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<Entity, With<Position>>,
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
     mut time: ResMut<Time<Virtual>>,
 ) {
+    // 1. Despawn all existing bodies
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    // 2. Reset tick count
+    engine.current_tick = 0;
+
+    let genome = engine.current_genome;
     let mut rng = rand::rng();
     time.set_relative_speed(SIMULATION_SPEED_FACTOR);
 
-    let base_mesh = meshes.add(Sphere::new(1.0).mesh().ico(4).unwrap());
+    // CRITICAL: Request assets as Option to prevent crash on startup under MinimalPlugins
+    let is_visual = meshes.is_some() && materials.is_some();
 
-    // Pre-built material pool (palette)
-    // Only these 256 materials will be sent to the GPU, thousands of objects will share them.
+    let mut base_mesh = None;
+    let mut material_palette = Vec::new();
     let palette_size = 256;
-    let mut material_palette = Vec::with_capacity(palette_size);
-    for i in 0..palette_size {
-        // Convert i (0..255) value to intensity (0.1..1.0) range
-        let t = i as f32 / (palette_size - 1) as f32;
-        let intensity = 0.1 + t * 0.9;
 
-        let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
-        let mut emissive_color: LinearRgba =
-            LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
-        if intensity > 0.98 {
-            emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
-        } else if intensity > 0.8 {
-            emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
-        } else if intensity < 0.12 {
-            emissive_color =
-                LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
+    if is_visual {
+        let mut meshes = meshes.unwrap();
+        let mut materials = materials.unwrap();
+        base_mesh = Some(meshes.add(Sphere::new(1.0).mesh().ico(4).unwrap()));
+
+        for i in 0..palette_size {
+            let t = i as f32 / (palette_size - 1) as f32;
+            let intensity = 0.1 + t * 0.9;
+            let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
+            let mut emissive_color = LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
+            if intensity > 0.98 {
+                emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
+            } else if intensity > 0.8 {
+                emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
+            } else if intensity < 0.12 {
+                emissive_color = LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
+            }
+
+            material_palette.push(materials.add(StandardMaterial {
+                base_color: color,
+                emissive: emissive_color,
+                metallic: 0.2,
+                perceptual_roughness: 0.5,
+                ..default()
+            }));
         }
-
-        material_palette.push(materials.add(StandardMaterial {
-            base_color: color,
-            emissive: emissive_color,
-            metallic: 0.2,
-            perceptual_roughness: 0.5,
-            ..default()
-        }));
     }
 
-    // Spawn the Objects
+    let mut sum_sq_dist = 0.0;
+
     for _ in 0..BODY_COUNT {
         let theta = rng.random_range(0.0..2.0) * PI;
         let phi = rng.random_range(0.0..1.0) * PI;
-        let dist = if BODY_POS_RANGE > 0.0 {
-            BODY_POS_RANGE * rng.random_range(0.0..1.0_f32).cbrt()
+        let dist = if genome.pos_range > 0.0 {
+            genome.pos_range * rng.random_range(0.0..1.0_f32).cbrt()
         } else {
             0.0
         };
@@ -204,45 +220,68 @@ fn spawn_bodies(
         let (sinp, cosp) = phi.sin_cos();
         let pos = Vec3::new(dist * sinp * cost, dist * sinp * sint, dist * cosp);
 
-        // Orbital-like velocities or random expansion velocities
-        let vel = if BODY_VEL_RANGE > 0.0 {
+        sum_sq_dist += pos.length_squared();
+
+        let vel = if genome.vel_range > 0.0 {
             Vec3::new(
-                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+                rng.random_range(-genome.vel_range..genome.vel_range),
+                rng.random_range(-genome.vel_range..genome.vel_range),
+                rng.random_range(-genome.vel_range..genome.vel_range),
             )
         } else {
             Vec3::ZERO
         };
-        let mass: f32 = if BODY_MASS_RANGE[0] < BODY_MASS_RANGE[1] {
-            rng.random_range(BODY_MASS_RANGE[0]..BODY_MASS_RANGE[1])
+
+        let mass_min = BODY_MASS_RANGE[0];
+        let mass = if mass_min < genome.mass_max {
+            rng.random_range(mass_min..genome.mass_max)
         } else {
-            BODY_MASS_RANGE[0]
+            mass_min
         };
-
-        // harmonized color based on mass (heavier bodies are hotter/brighter)
-        let intensity = (mass / 1000.0).clamp(0.1, 1.0);
-
-        // Convert Intensity value to pool index in [0, 255] range
-        let t = (intensity - 0.1) / 0.9;
-        let palette_index =
-            ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
-        let sphere_material = material_palette[palette_index].clone();
 
         let volume_factor = mass / 100.0;
         let radius = volume_factor.cbrt().max(BODY_MESH_RADIUS);
 
-        commands.spawn((
-            Mesh3d(base_mesh.clone()),
-            MeshMaterial3d(sphere_material),
-            Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
-            Position(pos),
-            Velocity(vel),
-            Mass(mass),
-            Radius(radius),
-        ));
+        if is_visual {
+            let intensity = (mass / 1000.0).clamp(0.1, 1.0);
+            let t = (intensity - 0.1) / 0.9;
+            let palette_index = ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
+            let sphere_material = material_palette[palette_index].clone();
+
+            commands.spawn((
+                Mesh3d(base_mesh.as_ref().unwrap().clone()),
+                MeshMaterial3d(sphere_material),
+                Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
+                Position(pos),
+                Velocity(vel),
+                Mass(mass),
+                Radius(radius),
+            ));
+        } else {
+            commands.spawn((
+                Position(pos),
+                Velocity(vel),
+                Mass(mass),
+                Radius(radius),
+            ));
+        }
     }
+
+    engine.initial_body_count = BODY_COUNT as usize;
+    engine.initial_rms_radius = if BODY_COUNT > 0 {
+        (sum_sq_dist / BODY_COUNT as f32).sqrt().max(1.0)
+    } else {
+        1.0
+    };
+
+    println!("--- [Generation {} Initialized] ---", engine.generation);
+    println!("  [Params] pos_range: {:.2}, vel_range: {:.2}, mass_max: {:.2}", genome.pos_range, genome.vel_range, genome.mass_max);
+    println!("  [Universe] bodies: {}, RMS Radius: {:.4}", engine.initial_body_count, engine.initial_rms_radius);
+
+    next_state.set(AppState::Simulate);
 }
+
+
 
 fn update_physics(
     time: Res<Time>,
