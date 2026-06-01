@@ -5,6 +5,7 @@ use bevy::{
     post_process::bloom::Bloom,
     prelude::*,
     window::WindowMode,
+    time::TimeUpdateStrategy,
 };
 use rand::RngExt;
 use bevy::platform::collections::HashMap;
@@ -27,6 +28,54 @@ pub struct Mass(pub f32);
 
 #[derive(Component, Debug)]
 pub struct Radius(pub f32);
+
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppState {
+    #[default]
+    Init,
+    Simulate,
+    Evaluate,
+    Mutate,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Genome {
+    pub pos_range: f32,
+    pub vel_range: f32,
+    pub mass_max: f32,
+}
+
+#[derive(Resource)]
+pub struct GeneticEngine {
+    pub generation: usize,
+    pub current_tick: usize,
+    pub max_ticks: usize,
+    pub current_genome: Genome,
+    pub best_genome: Genome,
+    pub best_fitness: f32,
+    pub initial_body_count: usize,
+    pub initial_rms_radius: f32,
+}
+
+impl Default for GeneticEngine {
+    fn default() -> Self {
+        let initial_genome = Genome {
+            pos_range: BODY_POS_RANGE,
+            vel_range: BODY_VEL_RANGE,
+            mass_max: BODY_MASS_RANGE[1],
+        };
+        Self {
+            generation: 1,
+            current_tick: 0,
+            max_ticks: 1500, // 1500 ticks per epoch
+            current_genome: initial_genome,
+            best_genome: initial_genome,
+            best_fitness: -1.0,
+            initial_body_count: BODY_COUNT as usize,
+            initial_rms_radius: 1.0,
+        }
+    }
+}
 
 fn main() {
     App::new()
