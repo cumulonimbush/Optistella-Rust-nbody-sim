@@ -1,14 +1,14 @@
 use crate::config::*;
+use bevy::platform::collections::HashMap;
 use bevy::{
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     core_pipeline::tonemapping::Tonemapping,
     post_process::bloom::Bloom,
     prelude::*,
-    window::WindowMode,
     time::TimeUpdateStrategy,
+    window::WindowMode,
 };
 use rand::RngExt;
-use bevy::platform::collections::HashMap;
 use std::f32::consts::PI;
 
 mod body;
@@ -85,12 +85,17 @@ fn main() {
 
     let mut app = App::new();
 
+    // 1. ADD PLUGINS FIRST (Crucial for Bevy 0.18 StatesPlugin / DefaultPlugins to be loaded before init_state)
     if is_headless {
+        // --- EĞİTİM MODU (HEADLESS) ---
         app.add_plugins(MinimalPlugins)
             .add_plugins(bevy::state::app::StatesPlugin)
             .add_plugins(bevy::log::LogPlugin::default())
-            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(0.016)));
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(0.016),
+            ));
     } else {
+        // --- GÖRSEL MOD (SHOWCASE) ---
         app.insert_resource(ClearColor(Color::BLACK))
             .add_plugins(DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
@@ -104,22 +109,29 @@ fn main() {
             .add_systems(Startup, (setup_camera, spawn_lights));
     }
 
+    // 2. ORTAK SİSTEMLER VE KAYNAKLAR (Eklentilerden sonra eklenmelidir)
     app.init_resource::<GeneticEngine>()
         .init_state::<AppState>()
-        // App State systems
         .add_systems(OnEnter(AppState::Init), init_population)
-        // Physics updates run in Simulate state
+        // Fizik motoru sadece Simulate state'inde çalışır
         .add_systems(
             Update,
             (update_physics, handle_acceleration)
                 .chain()
                 .run_if(in_state(AppState::Simulate)),
         );
+
+    // 3. EĞİTİM MODUNA ÖZEL SİSTEMLER
     if is_headless {
-        app.add_systems(Update, track_simulation.run_if(in_state(AppState::Simulate)))
+        // Yapay Zeka Döngü Sistemlerini SADECE eğitim modunda ekle
+        app.add_systems(
+            Update,
+            track_simulation.run_if(in_state(AppState::Simulate)),
+        )
         .add_systems(OnEnter(AppState::Evaluate), evaluate_generation)
         .add_systems(OnEnter(AppState::Mutate), mutate_generation);
     }
+
     app.run();
 }
 
@@ -172,6 +184,7 @@ fn init_population(
     // 2. Reset tick count
     engine.current_tick = 0;
 
+    // Load genome configuration
     let mut genome = engine.current_genome;
 
     // Load from disk if it's the very first initialization of the engine (generation == 1)
@@ -250,13 +263,16 @@ fn init_population(
             let t = i as f32 / (palette_size - 1) as f32;
             let intensity = 0.1 + t * 0.9;
             let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
-            let mut emissive_color = LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
+            let mut emissive_color =
+                LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
             if intensity > 0.98 {
                 emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
             } else if intensity > 0.8 {
-                emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
+                emissive_color =
+                    LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
             } else if intensity < 0.12 {
-                emissive_color = LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
+                emissive_color =
+                    LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
             }
 
             material_palette.push(materials.add(StandardMaterial {
@@ -272,28 +288,48 @@ fn init_population(
     let mut sum_sq_dist = 0.0;
 
     for _ in 0..BODY_COUNT {
-        let theta = rng.random_range(0.0..2.0) * PI;
-        let phi = rng.random_range(0.0..1.0) * PI;
-        let dist = if genome.pos_range > 0.0 {
-            genome.pos_range * rng.random_range(0.0..1.0_f32).cbrt()
+        // Concentrate bodies heavily towards the center using a power-law distribution
+        let radius_dist = if genome.pos_range > 0.0 {
+            genome.pos_range * rng.random_range(0.0..1.0_f32).powi(2)
         } else {
             0.0
         };
-        let (sint, cost) = theta.sin_cos();
-        let (sinp, cosp) = phi.sin_cos();
-        let pos = Vec3::new(dist * sinp * cost, dist * sinp * sint, dist * cosp);
+
+        // 2. Uniform angle around the Y axis
+        let theta = rng.random_range(0.0..std::f32::consts::TAU);
+
+        // 3. Slight vertical thickness (e.g., +/- 2.5% of the pos_range)
+        let y_thickness = genome.pos_range * 0.025;
+        let y_pos = rng.random_range(-y_thickness..=y_thickness);
+
+        // 4. Final Position
+        let pos = Vec3::new(radius_dist * theta.cos(), y_pos, radius_dist * theta.sin());
 
         sum_sq_dist += pos.length_squared();
 
-        let vel = if genome.vel_range > 0.0 {
-            Vec3::new(
-                rng.random_range(-genome.vel_range..genome.vel_range),
-                rng.random_range(-genome.vel_range..genome.vel_range),
-                rng.random_range(-genome.vel_range..genome.vel_range),
-            )
-        } else {
-            Vec3::ZERO
-        };
+        // 1. Calculate tangential direction relative to the Y-axis (UP)
+        let tangent = Vec3::Y.cross(pos).normalize_or_zero();
+
+        // 2. Define a core radius (e.g., 10% of the total disk size)
+        let core_radius = genome.pos_range * 0.10;
+        let distance = pos.length();
+
+        // v = spin * r / (r^2 + c^2)^(3/4)
+        // This yields v ~ r (Rigid Body) at the center, and v ~ 1/sqrt(r) (Keplerian) at the outer edges.
+        let distance_sq = distance * distance;
+        let core_sq = core_radius * core_radius;
+        let orbit_speed =
+            genome.orbital_spin * 300.0 * (distance / (distance_sq + core_sq).powf(0.75));
+
+        // 3. Add random noise (chaos) for the AI to optimize
+        let random_noise = Vec3::new(
+            rng.random_range(-genome.vel_variance..=genome.vel_variance),
+            rng.random_range(-genome.vel_variance..=genome.vel_variance),
+            rng.random_range(-genome.vel_variance..=genome.vel_variance),
+        );
+
+        // 4. Final Velocity
+        let vel = (tangent * orbit_speed) + random_noise;
 
         let mass_min = BODY_MASS_RANGE[0];
         let mass = if mass_min < genome.mass_max {
@@ -308,7 +344,8 @@ fn init_population(
         if is_visual {
             let intensity = (mass / 1000.0).clamp(0.1, 1.0);
             let t = (intensity - 0.1) / 0.9;
-            let palette_index = ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
+            let palette_index =
+                ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
             let sphere_material = material_palette[palette_index].clone();
 
             commands.spawn((
@@ -321,12 +358,7 @@ fn init_population(
                 Radius(radius),
             ));
         } else {
-            commands.spawn((
-                Position(pos),
-                Velocity(vel),
-                Mass(mass),
-                Radius(radius),
-            ));
+            commands.spawn((Position(pos), Velocity(vel), Mass(mass), Radius(radius)));
         }
     }
 
@@ -338,8 +370,14 @@ fn init_population(
     };
 
     println!("--- [Generation {} Initialized] ---", engine.generation);
-    println!("  [Params] pos_range: {:.2}, vel_range: {:.2}, mass_max: {:.2}", genome.pos_range, genome.vel_range, genome.mass_max);
-    println!("  [Universe] bodies: {}, RMS Radius: {:.4}", engine.initial_body_count, engine.initial_rms_radius);
+    println!(
+        "  [Params] pos_range: {:.2}, vel_variance: {:.2}, orbital_spin: {:.2}, mass_max: {:.2}",
+        genome.pos_range, genome.vel_variance, genome.orbital_spin, genome.mass_max
+    );
+    println!(
+        "  [Universe] bodies: {}, RMS Radius: {:.4}",
+        engine.initial_body_count, engine.initial_rms_radius
+    );
 
     next_state.set(AppState::Simulate);
 }
@@ -427,16 +465,42 @@ fn evaluate_generation(
     let fitness = s_mass * s_orbit * s_contain * s_survival;
 
     println!("=== [Evaluation of Gen {}] ===", engine.generation);
-    println!("  Fitness: {:.6} (S_mass: {:.4}, S_orbit: {:.4}, S_contain: {:.4}, S_survival: {:.4})", fitness, s_mass, s_orbit, s_contain, s_survival);
-    println!("  Active bodies: {} / {}", current_body_count, engine.initial_body_count);
-    println!("  RMS Radius: {:.2} (Initial: {:.2})", current_rms_radius, engine.initial_rms_radius);
+    println!(
+        "  Fitness: {:.6} (S_mass: {:.4}, S_orbit: {:.4}, S_contain: {:.4}, S_survival: {:.4})",
+        fitness, s_mass, s_orbit, s_contain, s_survival
+    );
+    println!(
+        "  Active bodies: {} / {}",
+        current_body_count, engine.initial_body_count
+    );
+    println!(
+        "  RMS Radius: {:.2} (Initial: {:.2})",
+        current_rms_radius, engine.initial_rms_radius
+    );
 
     if fitness > engine.best_fitness {
         engine.best_fitness = fitness;
         engine.best_genome = engine.current_genome;
         println!("  *** NEW BEST GENOME SET! ***");
+
+        // Immediately serialize and save best genome to disk
+        match serde_json::to_string_pretty(&engine.best_genome) {
+            Ok(json_str) => {
+                if let Err(e) = std::fs::write("best_genome.json", json_str) {
+                    println!("Warning: Failed to write best_genome.json: {}", e);
+                } else {
+                    println!("  [Saved best_genome.json to disk]");
+                }
+            }
+            Err(e) => {
+                println!("Warning: Failed to serialize best genome: {}", e);
+            }
+        }
     }
-    println!("  [Best Fitness So Far] {:.6}", engine.best_fitness.max(fitness));
+    println!(
+        "  [Best Fitness So Far] {:.6}",
+        engine.best_fitness.max(fitness)
+    );
 
     next_state.set(AppState::Mutate);
 }
@@ -450,20 +514,46 @@ fn mutate_generation(
     // Uniform percentage mutations in range [-0.15, +0.15]
     let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
     let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
+    let spin_mutation = 1.0 + rng.random_range(-0.15..0.15);
     let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
 
+    // Absolute steps to break out of zero locks
+    let vel_abs = rng.random_range(-0.5..=0.5);
+    let pos_abs = rng.random_range(-10.0..=10.0);
+
     let mut new_genome = engine.best_genome;
-    new_genome.pos_range = (new_genome.pos_range * pos_mutation).clamp(10.0, 5000.0);
-    new_genome.vel_range = (new_genome.vel_range * vel_mutation).clamp(0.0, 500.0);
+    new_genome.pos_range = (new_genome.pos_range * pos_mutation + pos_abs)
+        .max(200.0)
+        .clamp(200.0, 800.0); // GA'nın objeleri 800'den uzağa kaçırmasını YASAKLA
+    new_genome.vel_variance = (new_genome.vel_variance * vel_mutation + vel_abs)
+        .max(0.0)
+        .clamp(0.0, 500.0);
+    new_genome.orbital_spin = (new_genome.orbital_spin * spin_mutation).clamp(-500.0, 500.0);
     new_genome.mass_max = (new_genome.mass_max * mass_mutation).clamp(100.0, 10000.0);
 
     engine.current_genome = new_genome;
     engine.generation += 1;
 
-    println!("--- [Applying Mutation to Best Genome for Gen {}] ---", engine.generation);
-    println!("  Mutated pos_range: {:.2} -> {:.2}", engine.best_genome.pos_range, new_genome.pos_range);
-    println!("  Mutated vel_range: {:.2} -> {:.2}", engine.best_genome.vel_range, new_genome.vel_range);
-    println!("  Mutated mass_max:  {:.2} -> {:.2}", engine.best_genome.mass_max, new_genome.mass_max);
+    println!(
+        "--- [Applying Mutation to Best Genome for Gen {}] ---",
+        engine.generation
+    );
+    println!(
+        "  Mutated pos_range:    {:.2} -> {:.2}",
+        engine.best_genome.pos_range, new_genome.pos_range
+    );
+    println!(
+        "  Mutated vel_variance: {:.2} -> {:.2}",
+        engine.best_genome.vel_variance, new_genome.vel_variance
+    );
+    println!(
+        "  Mutated orbital_spin: {:.2} -> {:.2}",
+        engine.best_genome.orbital_spin, new_genome.orbital_spin
+    );
+    println!(
+        "  Mutated mass_max:     {:.2} -> {:.2}",
+        engine.best_genome.mass_max, new_genome.mass_max
+    );
 
     next_state.set(AppState::Init);
 }
@@ -472,7 +562,13 @@ fn update_physics(
     time: Res<Time>,
     mut local_octree: Local<Option<octree::Octree>>,
     mut local_bodies: Local<Vec<body::Body>>,
-    mut query: Query<(&mut Position, &mut Velocity, &Mass, &Radius, Option<&mut Transform>)>,
+    mut query: Query<(
+        &mut Position,
+        &mut Velocity,
+        &Mass,
+        &Radius,
+        Option<&mut Transform>,
+    )>,
 ) {
     let dt = time.delta_secs().min(0.03);
 
