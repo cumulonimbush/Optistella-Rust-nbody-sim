@@ -46,6 +46,26 @@ pub struct Genome {
     pub mass_max: f32,
 }
 
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SharedGenome {
+    pub fitness: f32,
+    pub genome: Genome,
+}
+
+fn load_best_genome() -> Option<(Genome, f32)> {
+    if std::path::Path::new("best_genome.json").exists() {
+        if let Ok(content) = std::fs::read_to_string("best_genome.json") {
+            if let Ok(shared) = serde_json::from_str::<SharedGenome>(&content) {
+                return Some((shared.genome, shared.fitness));
+            }
+            if let Ok(genome) = serde_json::from_str::<Genome>(&content) {
+                return Some((genome, -1.0));
+            }
+        }
+    }
+    None
+}
+
 #[derive(Resource)]
 pub struct GeneticEngine {
     pub generation: usize,
@@ -246,60 +266,62 @@ fn init_population(
 
     engine.current_tick = 0;
     let mut genome = engine.current_genome;
-
     if engine.generation == 1 {
-        if std::path::Path::new("best_genome.json").exists() {
-            match std::fs::read_to_string("best_genome.json") {
-                Ok(content) => match serde_json::from_str::<Genome>(&content) {
-                    Ok(loaded_genome) => {
-                        println!("Loaded optimized genome from best_genome.json");
-                        genome = loaded_genome;
-                        engine.current_genome = loaded_genome;
-                        engine.best_genome = loaded_genome;
-                    }
-                    Err(e) => {
-                        println!(
-                            "Failed to parse best_genome.json: {}. Using default parameters.",
-                            e
-                        );
-                        let fallback = Genome {
-                            pos_range: 800.0,
-                            vel_variance: 0.0,
-                            orbital_spin: 50.0,
-                            mass_max: 1000.0,
-                        };
-                        genome = fallback;
-                        engine.current_genome = fallback;
-                        engine.best_genome = fallback;
-                    }
-                },
-                Err(e) => {
-                    println!(
-                        "Failed to read best_genome.json: {}. Using default parameters.",
-                        e
-                    );
-                    let fallback = Genome {
-                        pos_range: 800.0,
-                        vel_variance: 0.0,
-                        orbital_spin: 50.0,
-                        mass_max: 1000.0,
-                    };
-                    genome = fallback;
-                    engine.current_genome = fallback;
-                    engine.best_genome = fallback;
-                }
-            }
+        if let Some((disk_genome, disk_fitness)) = load_best_genome() {
+            println!(
+                "Loaded optimized genome from best_genome.json with fitness: {:.6}",
+                disk_fitness
+            );
+            genome = disk_genome;
+            engine.current_genome = disk_genome;
+            engine.best_genome = disk_genome;
+            engine.best_fitness = disk_fitness;
         } else {
             println!("best_genome.json not found. Using default parameters.");
             let fallback = Genome {
                 pos_range: 800.0,
                 vel_variance: 0.0,
                 orbital_spin: 50.0,
-                mass_max: 1000.0,
+                mass_max: BODY_MASS_RANGE[1],
             };
             genome = fallback;
             engine.current_genome = fallback;
             engine.best_genome = fallback;
+            engine.best_fitness = -1.0;
+        }
+    } else {
+        // Island Model Migration: check if there is a better genome on disk
+        if let Some((disk_genome, disk_fitness)) = load_best_genome() {
+            if disk_fitness > engine.best_fitness {
+                println!(
+                    "[MİGRASYON] Diskten daha iyi bir genom tespit edildi! Fitness: {:.6} (Lokal En İyi: {:.6})",
+                    disk_fitness, engine.best_fitness
+                );
+                engine.best_fitness = disk_fitness;
+                engine.best_genome = disk_genome;
+
+                // Mutate from the migrated genome instead of old local best
+                let mut rng = rand::rng();
+                let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let spin_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let vel_abs = rng.random_range(-0.5..=0.5);
+                let pos_abs = rng.random_range(-10.0..=10.0);
+
+                let mut mutated = disk_genome;
+                mutated.pos_range = (mutated.pos_range * pos_mutation + pos_abs)
+                    .max(200.0)
+                    .clamp(200.0, 3000.0);
+                mutated.vel_variance = (mutated.vel_variance * vel_mutation + vel_abs)
+                    .max(0.0)
+                    .clamp(0.0, 500.0);
+                mutated.orbital_spin = (mutated.orbital_spin * spin_mutation).clamp(-500.0, 500.0);
+                mutated.mass_max = (mutated.mass_max * mass_mutation).clamp(100.0, 10000.0);
+
+                engine.current_genome = mutated;
+                genome = mutated;
+            }
         }
     }
 
@@ -521,12 +543,17 @@ fn evaluate_generation(
         engine.best_genome = engine.current_genome;
         println!("  *** NEW BEST GENOME SET! ***");
 
-        match serde_json::to_string_pretty(&engine.best_genome) {
+        let shared = SharedGenome {
+            fitness,
+            genome: engine.best_genome,
+        };
+
+        match serde_json::to_string_pretty(&shared) {
             Ok(json_str) => {
                 if let Err(e) = std::fs::write("best_genome.json", json_str) {
                     println!("Warning: Failed to write best_genome.json: {}", e);
                 } else {
-                    println!("  [Saved best_genome.json to disk]");
+                    println!("  [Saved best_genome.json to disk with fitness {:.6}]", fitness);
                 }
             }
             Err(e) => {
@@ -559,7 +586,7 @@ fn mutate_generation(
     let mut new_genome = engine.best_genome;
     new_genome.pos_range = (new_genome.pos_range * pos_mutation + pos_abs)
         .max(200.0)
-        .clamp(200.0, 800.0);
+        .clamp(200.0, 3000.0);
     new_genome.vel_variance = (new_genome.vel_variance * vel_mutation + vel_abs)
         .max(0.0)
         .clamp(0.0, 500.0);

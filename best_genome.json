@@ -1,6 +1,9 @@
 {
-  "pos_range": 1782.2218,
-  "vel_variance": 0.46697643,
-  "orbital_spin": 38.848988,
-  "mass_max": 545.85724
+  "fitness": 0.20579676,
+  "genome": {
+    "pos_range": 1879.9025,
+    "vel_variance": 0.0,
+    "orbital_spin": 41.143085,
+    "mass_max": 490.8955
+  }
 }
