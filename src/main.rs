@@ -5,6 +5,7 @@ use bevy::{
     post_process::bloom::Bloom,
     prelude::*,
     window::WindowMode,
+    time::TimeUpdateStrategy,
 };
 use rand::RngExt;
 use bevy::platform::collections::HashMap;
@@ -28,20 +29,92 @@ pub struct Mass(pub f32);
 #[derive(Component, Debug)]
 pub struct Radius(pub f32);
 
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppState {
+    #[default]
+    Init,
+    Simulate,
+    Evaluate,
+    Mutate,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Genome {
+    pub pos_range: f32,
+    pub vel_range: f32,
+    pub mass_max: f32,
+}
+
+#[derive(Resource)]
+pub struct GeneticEngine {
+    pub generation: usize,
+    pub current_tick: usize,
+    pub max_ticks: usize,
+    pub current_genome: Genome,
+    pub best_genome: Genome,
+    pub best_fitness: f32,
+    pub initial_body_count: usize,
+    pub initial_rms_radius: f32,
+}
+
+impl Default for GeneticEngine {
+    fn default() -> Self {
+        let initial_genome = Genome {
+            pos_range: BODY_POS_RANGE,
+            vel_range: BODY_VEL_RANGE,
+            mass_max: BODY_MASS_RANGE[1],
+        };
+        Self {
+            generation: 1,
+            current_tick: 0,
+            max_ticks: 1500, // 1500 ticks per epoch
+            current_genome: initial_genome,
+            best_genome: initial_genome,
+            best_fitness: -1.0,
+            initial_body_count: BODY_COUNT as usize,
+            initial_rms_radius: 1.0,
+        }
+    }
+}
+
 fn main() {
-    App::new()
-        .insert_resource(ClearColor(Color::BLACK))
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resizable: false,
-                mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+    let is_headless = std::env::args().any(|arg| arg == "--train");
+
+    let mut app = App::new();
+
+    if is_headless {
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::state::app::StatesPlugin)
+            .add_plugins(bevy::log::LogPlugin::default())
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(0.016)));
+    } else {
+        app.insert_resource(ClearColor(Color::BLACK))
+            .add_plugins(DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    resizable: false,
+                    mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(FreeCameraPlugin)
-        .add_systems(Startup, (setup_camera, spawn_lights, spawn_bodies))
-        .add_systems(Update, (update_physics, handle_acceleration).chain())
+            }))
+            .add_plugins(FreeCameraPlugin)
+            .add_systems(Startup, (setup_camera, spawn_lights));
+    }
+
+    app.init_resource::<GeneticEngine>()
+        .init_state::<AppState>()
+        // App State systems
+        .add_systems(OnEnter(AppState::Init), init_population)
+        .add_systems(Update, track_simulation.run_if(in_state(AppState::Simulate)))
+        .add_systems(OnEnter(AppState::Evaluate), evaluate_generation)
+        .add_systems(OnEnter(AppState::Mutate), mutate_generation)
+        // Physics updates run in Simulate state
+        .add_systems(
+            Update,
+            (update_physics, handle_acceleration)
+                .chain()
+                .run_if(in_state(AppState::Simulate)),
+        )
         .run();
 }
 
@@ -77,53 +150,69 @@ fn spawn_lights(mut commands: Commands) {
     ));
 }
 
-fn spawn_bodies(
+fn init_population(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<Entity, With<Position>>,
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
     mut time: ResMut<Time<Virtual>>,
 ) {
+    // 1. Despawn all existing bodies
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    // 2. Reset tick count
+    engine.current_tick = 0;
+
+    let genome = engine.current_genome;
     let mut rng = rand::rng();
     time.set_relative_speed(SIMULATION_SPEED_FACTOR);
 
-    let base_mesh = meshes.add(Sphere::new(1.0).mesh().ico(4).unwrap());
+    // CRITICAL: Request assets as Option to prevent crash on startup under MinimalPlugins
+    let is_visual = meshes.is_some() && materials.is_some();
 
-    // Pre-built material pool (palette)
-    // Only these 256 materials will be sent to the GPU, thousands of objects will share them.
+    let mut base_mesh = None;
+    let mut material_palette = Vec::new();
     let palette_size = 256;
-    let mut material_palette = Vec::with_capacity(palette_size);
-    for i in 0..palette_size {
-        // Convert i (0..255) value to intensity (0.1..1.0) range
-        let t = i as f32 / (palette_size - 1) as f32;
-        let intensity = 0.1 + t * 0.9;
 
-        let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
-        let mut emissive_color: LinearRgba =
-            LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
-        if intensity > 0.98 {
-            emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
-        } else if intensity > 0.8 {
-            emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
-        } else if intensity < 0.12 {
-            emissive_color =
-                LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
+    if is_visual {
+        let mut meshes = meshes.unwrap();
+        let mut materials = materials.unwrap();
+        base_mesh = Some(meshes.add(Sphere::new(1.0).mesh().ico(4).unwrap()));
+
+        for i in 0..palette_size {
+            let t = i as f32 / (palette_size - 1) as f32;
+            let intensity = 0.1 + t * 0.9;
+            let color = Color::hsl(30.0 + intensity * 40.0, 0.9, 0.4 + intensity * 0.3);
+            let mut emissive_color = LinearRgba::rgb(120.0 / intensity, 55.0 / intensity, intensity * 20.0);
+            if intensity > 0.98 {
+                emissive_color = LinearRgba::rgb(100.0, 100.0, 100.0);
+            } else if intensity > 0.8 {
+                emissive_color = LinearRgba::rgb(25.0 / intensity, 5.0 * intensity, intensity * 200.0);
+            } else if intensity < 0.12 {
+                emissive_color = LinearRgba::rgb(100.0 / intensity, 25.0 * intensity, intensity * 200.0);
+            }
+
+            material_palette.push(materials.add(StandardMaterial {
+                base_color: color,
+                emissive: emissive_color,
+                metallic: 0.2,
+                perceptual_roughness: 0.5,
+                ..default()
+            }));
         }
-
-        material_palette.push(materials.add(StandardMaterial {
-            base_color: color,
-            emissive: emissive_color,
-            metallic: 0.2,
-            perceptual_roughness: 0.5,
-            ..default()
-        }));
     }
 
-    // Spawn the Objects
+    let mut sum_sq_dist = 0.0;
+
     for _ in 0..BODY_COUNT {
         let theta = rng.random_range(0.0..2.0) * PI;
         let phi = rng.random_range(0.0..1.0) * PI;
-        let dist = if BODY_POS_RANGE > 0.0 {
-            BODY_POS_RANGE * rng.random_range(0.0..1.0_f32).cbrt()
+        let dist = if genome.pos_range > 0.0 {
+            genome.pos_range * rng.random_range(0.0..1.0_f32).cbrt()
         } else {
             0.0
         };
@@ -131,51 +220,196 @@ fn spawn_bodies(
         let (sinp, cosp) = phi.sin_cos();
         let pos = Vec3::new(dist * sinp * cost, dist * sinp * sint, dist * cosp);
 
-        // Orbital-like velocities or random expansion velocities
-        let vel = if BODY_VEL_RANGE > 0.0 {
+        sum_sq_dist += pos.length_squared();
+
+        let vel = if genome.vel_range > 0.0 {
             Vec3::new(
-                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
-                rng.random_range(-BODY_VEL_RANGE..BODY_VEL_RANGE),
+                rng.random_range(-genome.vel_range..genome.vel_range),
+                rng.random_range(-genome.vel_range..genome.vel_range),
+                rng.random_range(-genome.vel_range..genome.vel_range),
             )
         } else {
             Vec3::ZERO
         };
-        let mass: f32 = if BODY_MASS_RANGE[0] < BODY_MASS_RANGE[1] {
-            rng.random_range(BODY_MASS_RANGE[0]..BODY_MASS_RANGE[1])
+
+        let mass_min = BODY_MASS_RANGE[0];
+        let mass = if mass_min < genome.mass_max {
+            rng.random_range(mass_min..genome.mass_max)
         } else {
-            BODY_MASS_RANGE[0]
+            mass_min
         };
-
-        // harmonized color based on mass (heavier bodies are hotter/brighter)
-        let intensity = (mass / 1000.0).clamp(0.1, 1.0);
-
-        // Convert Intensity value to pool index in [0, 255] range
-        let t = (intensity - 0.1) / 0.9;
-        let palette_index =
-            ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
-        let sphere_material = material_palette[palette_index].clone();
 
         let volume_factor = mass / 100.0;
         let radius = volume_factor.cbrt().max(BODY_MESH_RADIUS);
 
-        commands.spawn((
-            Mesh3d(base_mesh.clone()),
-            MeshMaterial3d(sphere_material),
-            Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
-            Position(pos),
-            Velocity(vel),
-            Mass(mass),
-            Radius(radius),
-        ));
+        if is_visual {
+            let intensity = (mass / 1000.0).clamp(0.1, 1.0);
+            let t = (intensity - 0.1) / 0.9;
+            let palette_index = ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
+            let sphere_material = material_palette[palette_index].clone();
+
+            commands.spawn((
+                Mesh3d(base_mesh.as_ref().unwrap().clone()),
+                MeshMaterial3d(sphere_material),
+                Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
+                Position(pos),
+                Velocity(vel),
+                Mass(mass),
+                Radius(radius),
+            ));
+        } else {
+            commands.spawn((
+                Position(pos),
+                Velocity(vel),
+                Mass(mass),
+                Radius(radius),
+            ));
+        }
     }
+
+    engine.initial_body_count = BODY_COUNT as usize;
+    engine.initial_rms_radius = if BODY_COUNT > 0 {
+        (sum_sq_dist / BODY_COUNT as f32).sqrt().max(1.0)
+    } else {
+        1.0
+    };
+
+    println!("--- [Generation {} Initialized] ---", engine.generation);
+    println!("  [Params] pos_range: {:.2}, vel_range: {:.2}, mass_max: {:.2}", genome.pos_range, genome.vel_range, genome.mass_max);
+    println!("  [Universe] bodies: {}, RMS Radius: {:.4}", engine.initial_body_count, engine.initial_rms_radius);
+
+    next_state.set(AppState::Simulate);
+}
+
+fn track_simulation(
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    engine.current_tick += 1;
+    if engine.current_tick >= engine.max_ticks {
+        next_state.set(AppState::Evaluate);
+    }
+}
+
+fn evaluate_generation(
+    query: Query<(&Position, &Velocity, &Mass)>,
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let mut total_mass = 0.0f32;
+    let mut max_mass = 0.0f32;
+    let mut sum_sq_dist = 0.0f32;
+    let mut sum_orbit_terms = 0.0f32;
+    let current_body_count = query.iter().count();
+
+    for (pos, vel, mass) in query.iter() {
+        let m = mass.0;
+        let p = pos.0;
+        let v = vel.0;
+
+        total_mass += m;
+        if m > max_mass {
+            max_mass = m;
+        }
+
+        sum_sq_dist += p.length_squared();
+
+        let pos_len = p.length();
+        let vel_len = v.length();
+        // Handle zero lengths safely to completely prevent NaN
+        if pos_len > 1e-6 && vel_len > 1e-6 {
+            let norm_p = p / pos_len;
+            let norm_v = v / vel_len;
+            let dot_prod = norm_p.dot(norm_v).abs();
+            sum_orbit_terms += m * dot_prod;
+        }
+    }
+
+    // 1. S_mass
+    let s_mass = if total_mass > 0.0 {
+        let ratio = max_mass / total_mass;
+        (1.0 - ratio.powi(2)).max(0.0)
+    } else {
+        0.0
+    };
+
+    // 2. S_orbit
+    let s_orbit = if total_mass > 0.0 {
+        (1.0 - (sum_orbit_terms / total_mass)).max(0.0)
+    } else {
+        0.0
+    };
+
+    // 3. S_contain
+    let current_rms_radius = if current_body_count > 0 {
+        (sum_sq_dist / current_body_count as f32).sqrt()
+    } else {
+        0.0
+    };
+    let initial_rms = if engine.initial_rms_radius > 0.0 {
+        engine.initial_rms_radius
+    } else {
+        1.0
+    };
+    let s_contain = 1.0 / (1.0 + (current_rms_radius / initial_rms));
+
+    // 4. S_survival
+    let s_survival = if engine.initial_body_count > 0 {
+        current_body_count as f32 / engine.initial_body_count as f32
+    } else {
+        0.0
+    };
+
+    // Multiplicative Dimensionless Fitness
+    let fitness = s_mass * s_orbit * s_contain * s_survival;
+
+    println!("=== [Evaluation of Gen {}] ===", engine.generation);
+    println!("  Fitness: {:.6} (S_mass: {:.4}, S_orbit: {:.4}, S_contain: {:.4}, S_survival: {:.4})", fitness, s_mass, s_orbit, s_contain, s_survival);
+    println!("  Active bodies: {} / {}", current_body_count, engine.initial_body_count);
+    println!("  RMS Radius: {:.2} (Initial: {:.2})", current_rms_radius, engine.initial_rms_radius);
+
+    if fitness > engine.best_fitness {
+        engine.best_fitness = fitness;
+        engine.best_genome = engine.current_genome;
+        println!("  *** NEW BEST GENOME SET! ***");
+    }
+    println!("  [Best Fitness So Far] {:.6}", engine.best_fitness.max(fitness));
+
+    next_state.set(AppState::Mutate);
+}
+
+fn mutate_generation(
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let mut rng = rand::rng();
+
+    // Uniform percentage mutations in range [-0.15, +0.15]
+    let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
+    let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
+    let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
+
+    let mut new_genome = engine.best_genome;
+    new_genome.pos_range = (new_genome.pos_range * pos_mutation).clamp(10.0, 5000.0);
+    new_genome.vel_range = (new_genome.vel_range * vel_mutation).clamp(0.0, 500.0);
+    new_genome.mass_max = (new_genome.mass_max * mass_mutation).clamp(100.0, 10000.0);
+
+    engine.current_genome = new_genome;
+    engine.generation += 1;
+
+    println!("--- [Applying Mutation to Best Genome for Gen {}] ---", engine.generation);
+    println!("  Mutated pos_range: {:.2} -> {:.2}", engine.best_genome.pos_range, new_genome.pos_range);
+    println!("  Mutated vel_range: {:.2} -> {:.2}", engine.best_genome.vel_range, new_genome.vel_range);
+    println!("  Mutated mass_max:  {:.2} -> {:.2}", engine.best_genome.mass_max, new_genome.mass_max);
+
+    next_state.set(AppState::Init);
 }
 
 fn update_physics(
     time: Res<Time>,
     mut local_octree: Local<Option<octree::Octree>>,
     mut local_bodies: Local<Vec<body::Body>>,
-    mut query: Query<(&mut Position, &mut Velocity, &Mass, &Radius, &mut Transform)>,
+    mut query: Query<(&mut Position, &mut Velocity, &Mass, &Radius, Option<&mut Transform>)>,
 ) {
     let dt = time.delta_secs().min(0.03);
 
@@ -211,7 +445,9 @@ fn update_physics(
             let acc = octree_ref.acc(pos.0);
             vel.0 += acc * dt;
             pos.0 += vel.0 * dt;
-            transform.translation = pos.0;
+            if let Some(ref mut t) = transform {
+                t.translation = pos.0;
+            }
         });
 }
 
@@ -253,7 +489,7 @@ fn handle_acceleration(
         &mut Velocity,
         &mut Mass,
         &mut Radius,
-        &mut Transform,
+        Option<&mut Transform>,
     )>,
     mut cache: Local<AccelerationCache>,
     mut prev_max_radius: Local<f32>,
@@ -414,8 +650,10 @@ fn handle_acceleration(
                     m.0 = total_mass;
                     r.0 = new_radius;
 
-                    t.translation = new_pos;
-                    t.scale = Vec3::splat(new_radius);
+                    if let Some(ref mut t) = t {
+                        t.translation = new_pos;
+                        t.scale = Vec3::splat(new_radius);
+                    }
                 }
             }
         }
