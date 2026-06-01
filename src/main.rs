@@ -281,7 +281,129 @@ fn init_population(
     next_state.set(AppState::Simulate);
 }
 
+fn track_simulation(
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    engine.current_tick += 1;
+    if engine.current_tick >= engine.max_ticks {
+        next_state.set(AppState::Evaluate);
+    }
+}
 
+fn evaluate_generation(
+    query: Query<(&Position, &Velocity, &Mass)>,
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let mut total_mass = 0.0f32;
+    let mut max_mass = 0.0f32;
+    let mut sum_sq_dist = 0.0f32;
+    let mut sum_orbit_terms = 0.0f32;
+    let current_body_count = query.iter().count();
+
+    for (pos, vel, mass) in query.iter() {
+        let m = mass.0;
+        let p = pos.0;
+        let v = vel.0;
+
+        total_mass += m;
+        if m > max_mass {
+            max_mass = m;
+        }
+
+        sum_sq_dist += p.length_squared();
+
+        let pos_len = p.length();
+        let vel_len = v.length();
+        // Handle zero lengths safely to completely prevent NaN
+        if pos_len > 1e-6 && vel_len > 1e-6 {
+            let norm_p = p / pos_len;
+            let norm_v = v / vel_len;
+            let dot_prod = norm_p.dot(norm_v).abs();
+            sum_orbit_terms += m * dot_prod;
+        }
+    }
+
+    // 1. S_mass
+    let s_mass = if total_mass > 0.0 {
+        let ratio = max_mass / total_mass;
+        (1.0 - ratio.powi(2)).max(0.0)
+    } else {
+        0.0
+    };
+
+    // 2. S_orbit
+    let s_orbit = if total_mass > 0.0 {
+        (1.0 - (sum_orbit_terms / total_mass)).max(0.0)
+    } else {
+        0.0
+    };
+
+    // 3. S_contain
+    let current_rms_radius = if current_body_count > 0 {
+        (sum_sq_dist / current_body_count as f32).sqrt()
+    } else {
+        0.0
+    };
+    let initial_rms = if engine.initial_rms_radius > 0.0 {
+        engine.initial_rms_radius
+    } else {
+        1.0
+    };
+    let s_contain = 1.0 / (1.0 + (current_rms_radius / initial_rms));
+
+    // 4. S_survival
+    let s_survival = if engine.initial_body_count > 0 {
+        current_body_count as f32 / engine.initial_body_count as f32
+    } else {
+        0.0
+    };
+
+    // Multiplicative Dimensionless Fitness
+    let fitness = s_mass * s_orbit * s_contain * s_survival;
+
+    println!("=== [Evaluation of Gen {}] ===", engine.generation);
+    println!("  Fitness: {:.6} (S_mass: {:.4}, S_orbit: {:.4}, S_contain: {:.4}, S_survival: {:.4})", fitness, s_mass, s_orbit, s_contain, s_survival);
+    println!("  Active bodies: {} / {}", current_body_count, engine.initial_body_count);
+    println!("  RMS Radius: {:.2} (Initial: {:.2})", current_rms_radius, engine.initial_rms_radius);
+
+    if fitness > engine.best_fitness {
+        engine.best_fitness = fitness;
+        engine.best_genome = engine.current_genome;
+        println!("  *** NEW BEST GENOME SET! ***");
+    }
+    println!("  [Best Fitness So Far] {:.6}", engine.best_fitness.max(fitness));
+
+    next_state.set(AppState::Mutate);
+}
+
+fn mutate_generation(
+    mut engine: ResMut<GeneticEngine>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let mut rng = rand::rng();
+
+    // Uniform percentage mutations in range [-0.15, +0.15]
+    let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
+    let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
+    let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
+
+    let mut new_genome = engine.best_genome;
+    new_genome.pos_range = (new_genome.pos_range * pos_mutation).clamp(10.0, 5000.0);
+    new_genome.vel_range = (new_genome.vel_range * vel_mutation).clamp(0.0, 500.0);
+    new_genome.mass_max = (new_genome.mass_max * mass_mutation).clamp(100.0, 10000.0);
+
+    engine.current_genome = new_genome;
+    engine.generation += 1;
+
+    println!("--- [Applying Mutation to Best Genome for Gen {}] ---", engine.generation);
+    println!("  Mutated pos_range: {:.2} -> {:.2}", engine.best_genome.pos_range, new_genome.pos_range);
+    println!("  Mutated vel_range: {:.2} -> {:.2}", engine.best_genome.vel_range, new_genome.vel_range);
+    println!("  Mutated mass_max:  {:.2} -> {:.2}", engine.best_genome.mass_max, new_genome.mass_max);
+
+    next_state.set(AppState::Init);
+}
 
 fn update_physics(
     time: Res<Time>,
