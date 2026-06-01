@@ -14,6 +14,7 @@ use std::f32::consts::PI;
 mod body;
 mod config;
 mod octree;
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -38,10 +39,11 @@ pub enum AppState {
     Mutate,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Genome {
     pub pos_range: f32,
-    pub vel_range: f32,
+    pub vel_variance: f32, // Chaos/noise in the velocity
+    pub orbital_spin: f32, // The coefficient for tangential velocity
     pub mass_max: f32,
 }
 
@@ -61,13 +63,14 @@ impl Default for GeneticEngine {
     fn default() -> Self {
         let initial_genome = Genome {
             pos_range: BODY_POS_RANGE,
-            vel_range: BODY_VEL_RANGE,
+            vel_variance: BODY_VEL_RANGE,
+            orbital_spin: 50.0,
             mass_max: BODY_MASS_RANGE[1],
         };
         Self {
             generation: 1,
             current_tick: 0,
-            max_ticks: 1500, // 1500 ticks per epoch
+            max_ticks: 4000, // 4000 ticks per epoch
             current_genome: initial_genome,
             best_genome: initial_genome,
             best_fitness: -1.0,
@@ -105,17 +108,19 @@ fn main() {
         .init_state::<AppState>()
         // App State systems
         .add_systems(OnEnter(AppState::Init), init_population)
-        .add_systems(Update, track_simulation.run_if(in_state(AppState::Simulate)))
-        .add_systems(OnEnter(AppState::Evaluate), evaluate_generation)
-        .add_systems(OnEnter(AppState::Mutate), mutate_generation)
         // Physics updates run in Simulate state
         .add_systems(
             Update,
             (update_physics, handle_acceleration)
                 .chain()
                 .run_if(in_state(AppState::Simulate)),
-        )
-        .run();
+        );
+    if is_headless {
+        app.add_systems(Update, track_simulation.run_if(in_state(AppState::Simulate)))
+        .add_systems(OnEnter(AppState::Evaluate), evaluate_generation)
+        .add_systems(OnEnter(AppState::Mutate), mutate_generation);
+    }
+    app.run();
 }
 
 fn setup_camera(mut commands: Commands) {
