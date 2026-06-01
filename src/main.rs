@@ -172,7 +172,65 @@ fn init_population(
     // 2. Reset tick count
     engine.current_tick = 0;
 
-    let genome = engine.current_genome;
+    let mut genome = engine.current_genome;
+
+    // Load from disk if it's the very first initialization of the engine (generation == 1)
+    if engine.generation == 1 {
+        if std::path::Path::new("best_genome.json").exists() {
+            match std::fs::read_to_string("best_genome.json") {
+                Ok(content) => match serde_json::from_str::<Genome>(&content) {
+                    Ok(loaded_genome) => {
+                        println!("Loaded optimized genome from best_genome.json");
+                        genome = loaded_genome;
+                        engine.current_genome = loaded_genome;
+                        engine.best_genome = loaded_genome;
+                    }
+                    Err(e) => {
+                        println!(
+                            "Failed to parse best_genome.json: {}. Using default parameters.",
+                            e
+                        );
+                        let fallback = Genome {
+                            pos_range: 800.0,
+                            vel_variance: 0.0,
+                            orbital_spin: 50.0,
+                            mass_max: 1000.0,
+                        };
+                        genome = fallback;
+                        engine.current_genome = fallback;
+                        engine.best_genome = fallback;
+                    }
+                },
+                Err(e) => {
+                    println!(
+                        "Failed to read best_genome.json: {}. Using default parameters.",
+                        e
+                    );
+                    let fallback = Genome {
+                        pos_range: 800.0,
+                        vel_variance: 0.0,
+                        orbital_spin: 50.0,
+                        mass_max: 1000.0,
+                    };
+                    genome = fallback;
+                    engine.current_genome = fallback;
+                    engine.best_genome = fallback;
+                }
+            }
+        } else {
+            println!("best_genome.json not found. Using default parameters.");
+            let fallback = Genome {
+                pos_range: 800.0,
+                vel_variance: 0.0,
+                orbital_spin: 50.0,
+                mass_max: 1000.0,
+            };
+            genome = fallback;
+            engine.current_genome = fallback;
+            engine.best_genome = fallback;
+        }
+    }
+
     let mut rng = rand::rng();
     time.set_relative_speed(SIMULATION_SPEED_FACTOR);
 
