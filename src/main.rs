@@ -409,7 +409,7 @@ fn update_physics(
     time: Res<Time>,
     mut local_octree: Local<Option<octree::Octree>>,
     mut local_bodies: Local<Vec<body::Body>>,
-    mut query: Query<(&mut Position, &mut Velocity, &Mass, &Radius, &mut Transform)>,
+    mut query: Query<(&mut Position, &mut Velocity, &Mass, &Radius, Option<&mut Transform>)>,
 ) {
     let dt = time.delta_secs().min(0.03);
 
@@ -445,7 +445,9 @@ fn update_physics(
             let acc = octree_ref.acc(pos.0);
             vel.0 += acc * dt;
             pos.0 += vel.0 * dt;
-            transform.translation = pos.0;
+            if let Some(ref mut t) = transform {
+                t.translation = pos.0;
+            }
         });
 }
 
@@ -487,7 +489,7 @@ fn handle_acceleration(
         &mut Velocity,
         &mut Mass,
         &mut Radius,
-        &mut Transform,
+        Option<&mut Transform>,
     )>,
     mut cache: Local<AccelerationCache>,
     mut prev_max_radius: Local<f32>,
@@ -648,8 +650,10 @@ fn handle_acceleration(
                     m.0 = total_mass;
                     r.0 = new_radius;
 
-                    t.translation = new_pos;
-                    t.scale = Vec3::splat(new_radius);
+                    if let Some(ref mut t) = t {
+                        t.translation = new_pos;
+                        t.scale = Vec3::splat(new_radius);
+                    }
                 }
             }
         }
