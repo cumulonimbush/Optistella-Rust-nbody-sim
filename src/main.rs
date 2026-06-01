@@ -78,19 +78,43 @@ impl Default for GeneticEngine {
 }
 
 fn main() {
-    App::new()
-        .insert_resource(ClearColor(Color::BLACK))
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resizable: false,
-                mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+    let is_headless = std::env::args().any(|arg| arg == "--train");
+
+    let mut app = App::new();
+
+    if is_headless {
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::state::app::StatesPlugin)
+            .add_plugins(bevy::log::LogPlugin::default())
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(0.016)));
+    } else {
+        app.insert_resource(ClearColor(Color::BLACK))
+            .add_plugins(DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    resizable: false,
+                    mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(FreeCameraPlugin)
-        .add_systems(Startup, (setup_camera, spawn_lights, spawn_bodies))
-        .add_systems(Update, (update_physics, handle_acceleration).chain())
+            }))
+            .add_plugins(FreeCameraPlugin)
+            .add_systems(Startup, (setup_camera, spawn_lights));
+    }
+
+    app.init_resource::<GeneticEngine>()
+        .init_state::<AppState>()
+        // App State systems
+        .add_systems(OnEnter(AppState::Init), init_population)
+        .add_systems(Update, track_simulation.run_if(in_state(AppState::Simulate)))
+        .add_systems(OnEnter(AppState::Evaluate), evaluate_generation)
+        .add_systems(OnEnter(AppState::Mutate), mutate_generation)
+        // Physics updates run in Simulate state
+        .add_systems(
+            Update,
+            (update_physics, handle_acceleration)
+                .chain()
+                .run_if(in_state(AppState::Simulate)),
+        )
         .run();
 }
 
