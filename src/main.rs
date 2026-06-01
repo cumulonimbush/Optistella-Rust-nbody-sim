@@ -308,16 +308,15 @@ fn handle_acceleration(
     let head = &mut cache.head;
     head.fill(usize::MAX);
 
-    // Resize next array to fit current n elements
+    // Reset next array
     let next = &mut cache.next;
     next.clear();
-    next.resize(n, usize::MAX);
 
     // Place all bodies into the Flat Array Hash Grid O(N)
     for i in 0..n {
         let cell = bodies[i].5;
         let hash_idx = hash_cell(cell) & (HASH_SIZE - 1);
-        next[i] = head[hash_idx];
+        next.push(head[hash_idx]);
         head[hash_idx] = i;
     }
 
