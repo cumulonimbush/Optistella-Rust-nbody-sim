@@ -7,7 +7,7 @@ use bevy::{
     window::WindowMode,
 };
 use rand::RngExt;
-use std::collections::HashMap;
+use bevy::platform::collections::HashMap;
 use std::f32::consts::PI;
 
 mod body;
