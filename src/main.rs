@@ -13,6 +13,8 @@ use std::f32::consts::PI;
 mod body;
 mod config;
 mod octree;
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Component, Debug)]
 pub struct Position(pub Vec3);
@@ -121,7 +123,7 @@ fn spawn_bodies(
         let theta = rng.random_range(0.0..2.0) * PI;
         let phi = rng.random_range(0.0..1.0) * PI;
         let dist = if BODY_POS_RANGE > 0.0 {
-            rng.random_range(0.0..BODY_POS_RANGE)
+            BODY_POS_RANGE * rng.random_range(0.0..1.0_f32).cbrt()
         } else {
             0.0
         };
@@ -154,8 +156,8 @@ fn spawn_bodies(
             ((t * (palette_size - 1) as f32).round() as usize).min(palette_size - 1);
         let sphere_material = material_palette[palette_index].clone();
 
-        // Recycle mesh radius as object radius
-        let radius = (BODY_MESH_RADIUS * intensity.powi(3) * 8.0).max(BODY_MESH_RADIUS);
+        let volume_factor = mass / 100.0;
+        let radius = volume_factor.cbrt().max(BODY_MESH_RADIUS);
 
         commands.spawn((
             Mesh3d(base_mesh.clone()),
@@ -169,91 +171,43 @@ fn spawn_bodies(
     }
 }
 
-#[inline]
-fn expand_bits(v: u32) -> u64 {
-    let mut x = v as u64 & 0x00000000001fffff;
-    x = (x | (x << 32)) & 0x001f00000000ffff;
-    x = (x | (x << 16)) & 0x001f0000ff0000ff;
-    x = (x | (x << 8))  & 0x010f00f00f00f00f;
-    x = (x | (x << 4))  & 0x10c30c30c30c30c3;
-    x = (x | (x << 2))  & 0x1249249249249249;
-    x
-}
-
-#[inline]
-fn morton_3d(x: u32, y: u32, z: u32) -> u64 {
-    (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z)
-}
-
 fn update_physics(
     time: Res<Time>,
     mut local_octree: Local<Option<octree::Octree>>,
     mut local_bodies: Local<Vec<body::Body>>,
-    mut local_morton: Local<Vec<(u64, body::Body)>>,
-    mut query: Query<(&mut Position, &mut Velocity, &Mass, &mut Transform)>,
+    mut query: Query<(&mut Position, &mut Velocity, &Mass, &Radius, &mut Transform)>,
 ) {
-    let dt = time.delta_secs().min(0.03); // Cap dt to avoid large time step instability
+    let dt = time.delta_secs().min(0.03);
 
-    // Eğer octree ilk defa çalışıyorsa yarat
     if local_octree.is_none() {
         *local_octree = Some(octree::Octree::new(0.5, 2.0));
     }
     let octree = local_octree.as_mut().unwrap();
 
-    // Gather active body data to construct the Octree
     let bodies = &mut *local_bodies;
     bodies.clear();
-    for (pos, vel, mass, _) in query.iter() {
-        bodies.push(body::Body::new(pos.0, vel.0, mass.0, BODY_MESH_RADIUS));
+    for (pos, vel, mass, radius, _) in query.iter() {
+        bodies.push(body::Body::new(pos.0, vel.0, mass.0, radius.0));
     }
 
     if bodies.is_empty() {
         return;
     }
 
-    // Build standard Bounds3D containing all active bodies
     let bounds = octree::Bounds3D::new_containing(bodies);
-
-    // Cache-friendly Z-Order sorting (Morton Encoding)
-    let min_coord = bounds.center - Vec3::splat(bounds.size * 0.5);
-    let range = bounds.size;
-
-    let morton_vec = &mut *local_morton;
-    morton_vec.clear();
-    for body in bodies.iter() {
-        let norm = if range > 0.0 {
-            (body.pos - min_coord) / range
-        } else {
-            Vec3::ZERO
-        };
-        let ux = (norm.x.clamp(0.0, 1.0) * 2097151.0) as u32;
-        let uy = (norm.y.clamp(0.0, 1.0) * 2097151.0) as u32;
-        let uz = (norm.z.clamp(0.0, 1.0) * 2097151.0) as u32;
-        let code = morton_3d(ux, uy, uz);
-        morton_vec.push((code, *body));
-    }
-
-    // Sort bodies by their Morton codes
-    morton_vec.sort_unstable_by_key(|&(code, _)| code);
-
-    // Re-populate bodies in sorted order
-    bodies.clear();
-    for (_, body) in morton_vec.iter() {
-        bodies.push(*body);
-    }
-
     octree.clear(bounds);
 
+    // 1. Zirve Performanslı Tek Çekirdek İnşa (Eski 90 FPS'lik yöntem)
     for body in bodies.iter() {
         octree.insert(body.pos, body.mass);
     }
     octree.propagate();
 
-    // Apply acceleration calculated from Octree (MULTITHREADED)
+    // 2. Rayon ile Paralel Kütleçekim Hesabı (Gerçek Multithreading gücü)
     let octree_ref = &*octree;
     query
         .par_iter_mut()
-        .for_each(|(mut pos, mut vel, _mass, mut transform)| {
+        .for_each(|(mut pos, mut vel, _mass, _radius, mut transform)| {
             let acc = octree_ref.acc(pos.0);
             vel.0 += acc * dt;
             pos.0 += vel.0 * dt;
@@ -305,8 +259,13 @@ fn handle_acceleration(
 ) {
     let cache = &mut *cache;
 
-    // The cell size must be greater than the sum of the expected maximum radii.
-    let cell_size = 10.0;
+    // 1. DİNAMİK HÜCRE BOYUTU HESAPLAMA (TUNNELING ENGELLEYİCİ)
+    let mut max_radius = 0.0f32;
+    for (_, _, _, _, radius, _) in query.iter() {
+        max_radius = max_radius.max(radius.0);
+    }
+    // En büyük yarıçapın 2.2 katı veya minimum 10.0 (Büyük objeler hücre atlamaz)
+    let cell_size = (max_radius * 2.2).max(10.0);
 
     // Copy all entity data to a temporary vector for reading and precompute cells.
     let bodies = &mut cache.bodies;
@@ -457,7 +416,7 @@ fn handle_acceleration(
                     r.0 = new_radius;
 
                     t.translation = new_pos;
-                    t.scale = Vec3::splat(new_radius / 0.4);
+                    t.scale = Vec3::splat(new_radius);
                 }
             }
         }

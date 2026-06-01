@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.18.1", features = ["dynamic_linking", "free_camera"] }
+bevy = { version = "0.18.1", features = ["free_camera"] }
 rand = "0.10.1"
 glam = "0.30"
+rayon = "1.10"
+mimalloc = "0.1"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

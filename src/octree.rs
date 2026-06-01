@@ -153,7 +153,10 @@ impl Octree {
         }
 
         let (p, m) = (self.nodes[node].pos, self.nodes[node].mass);
-        if pos == p {
+
+        // Float Drift Koruması: İki obje mikroskobik olarak aynı yerdeyse,
+        // ağacı sonsuza kadar bölmek yerine kütlelerini aynı düğümde birleştir.
+        if pos.distance_squared(p) < 1e-6 {
             self.nodes[node].mass += mass;
             return;
         }
@@ -210,6 +213,16 @@ impl Octree {
         let mut node = Self::ROOT;
         loop {
             let n = &self.nodes[node];
+
+            // ALTIN VURUŞ: Eğer düğüm tamamen boşsa, vektör matematiğine
+            // hiç girmeden doğrudan bir sonraki düğüme (next) atla.
+            if n.mass == 0.0 {
+                if n.next == 0 {
+                    break;
+                }
+                node = n.next;
+                continue;
+            }
 
             let d = n.pos - pos;
             let d_sq = d.length_squared();
