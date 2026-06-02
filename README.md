@@ -24,6 +24,10 @@ When running the simulation normally (without the training flag), you can naviga
 * **`P`**: Pause / Resume physics simulation
 * **`O`**: Toggle Octree spatial partitioning visualisation (Gizmos)
 
+ <img width="1919" height="1199" alt="Untitled2" src="https://github.com/user-attachments/assets/c48fab54-7f03-4a12-89d5-7aea9b270d98" />
+ <img width="1919" height="1199" alt="Untitled" src="https://github.com/user-attachments/assets/050ca5a2-d200-484b-9209-b48dfbadf515" />
+
+
 ## Usage & Execution
 
 ### Native Rust Execution
