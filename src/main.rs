@@ -9,7 +9,6 @@ use bevy::{
     window::WindowMode,
 };
 use rand::RngExt;
-use std::f32::consts::PI;
 
 mod body;
 mod config;
@@ -42,9 +41,29 @@ pub enum AppState {
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Genome {
     pub pos_range: f32,
-    pub vel_variance: f32, // Chaos/noise in the velocity
-    pub orbital_spin: f32, // The coefficient for tangential velocity
+    pub vel_variance: f32,
+    pub orbital_spin: f32,
     pub mass_max: f32,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SharedGenome {
+    pub fitness: f32,
+    pub genome: Genome,
+}
+
+fn load_best_genome() -> Option<(Genome, f32)> {
+    if std::path::Path::new("best_genome.json").exists() {
+        if let Ok(content) = std::fs::read_to_string("best_genome.json") {
+            if let Ok(shared) = serde_json::from_str::<SharedGenome>(&content) {
+                return Some((shared.genome, shared.fitness));
+            }
+            if let Ok(genome) = serde_json::from_str::<Genome>(&content) {
+                return Some((genome, -1.0));
+            }
+        }
+    }
+    None
 }
 
 #[derive(Resource)]
@@ -70,7 +89,7 @@ impl Default for GeneticEngine {
         Self {
             generation: 1,
             current_tick: 0,
-            max_ticks: 4000, // 4000 ticks per epoch
+            max_ticks: 4000,
             current_genome: initial_genome,
             best_genome: initial_genome,
             best_fitness: -1.0,
@@ -80,14 +99,29 @@ impl Default for GeneticEngine {
     }
 }
 
+#[derive(Resource)]
+pub struct SimState {
+    pub speed: f32,
+    pub is_paused: bool,
+    pub tick_counter: u32,
+}
+
+impl Default for SimState {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            is_paused: false,
+            tick_counter: 0,
+        }
+    }
+}
+
 fn main() {
     let is_headless = std::env::args().any(|arg| arg == "--train");
 
     let mut app = App::new();
 
-    // 1. ADD PLUGINS FIRST (Crucial for Bevy 0.18 StatesPlugin / DefaultPlugins to be loaded before init_state)
     if is_headless {
-        // --- EĞİTİM MODU (HEADLESS) ---
         app.add_plugins(MinimalPlugins)
             .add_plugins(bevy::state::app::StatesPlugin)
             .add_plugins(bevy::log::LogPlugin::default())
@@ -95,8 +129,8 @@ fn main() {
                 std::time::Duration::from_secs_f32(0.016),
             ));
     } else {
-        // --- GÖRSEL MOD (SHOWCASE) ---
         app.insert_resource(ClearColor(Color::BLACK))
+            .init_resource::<SimState>()
             .add_plugins(DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     resizable: false,
@@ -106,14 +140,14 @@ fn main() {
                 ..default()
             }))
             .add_plugins(FreeCameraPlugin)
-            .add_systems(Startup, (setup_camera, spawn_lights));
+            .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+            .add_systems(Startup, (setup_camera, spawn_lights))
+            .add_systems(Update, (handle_keyboard_controls, print_metrics));
     }
 
-    // 2. ORTAK SİSTEMLER VE KAYNAKLAR (Eklentilerden sonra eklenmelidir)
     app.init_resource::<GeneticEngine>()
         .init_state::<AppState>()
         .add_systems(OnEnter(AppState::Init), init_population)
-        // Fizik motoru sadece Simulate state'inde çalışır
         .add_systems(
             Update,
             (update_physics, handle_acceleration)
@@ -121,9 +155,7 @@ fn main() {
                 .run_if(in_state(AppState::Simulate)),
         );
 
-    // 3. EĞİTİM MODUNA ÖZEL SİSTEMLER
     if is_headless {
-        // Yapay Zeka Döngü Sistemlerini SADECE eğitim modunda ekle
         app.add_systems(
             Update,
             track_simulation.run_if(in_state(AppState::Simulate)),
@@ -133,6 +165,58 @@ fn main() {
     }
 
     app.run();
+}
+
+fn handle_keyboard_controls(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut sim_state: ResMut<SimState>,
+    mut time: ResMut<Time<Virtual>>,
+) {
+    if keyboard_input.just_pressed(KeyCode::KeyP) {
+        sim_state.is_paused = !sim_state.is_paused;
+        if sim_state.is_paused {
+            time.pause();
+            println!("[SİSTEM] Simülasyon DURAKLATILDI.");
+        } else {
+            time.unpause();
+            println!("[SİSTEM] Simülasyon DEVAM EDİYOR.");
+        }
+    }
+
+    if keyboard_input.just_pressed(KeyCode::ArrowRight) {
+        sim_state.speed = (sim_state.speed + 0.5).clamp(0.1, 10.0);
+        time.set_relative_speed(sim_state.speed);
+        println!("[SİSTEM] Hız artırıldı: {:.1}x", sim_state.speed);
+    }
+
+    if keyboard_input.just_pressed(KeyCode::ArrowLeft) {
+        sim_state.speed = (sim_state.speed - 0.5).clamp(0.1, 10.0);
+        time.set_relative_speed(sim_state.speed);
+        println!("[SİSTEM] Hız düşürüldü: {:.1}x", sim_state.speed);
+    }
+}
+
+fn print_metrics(
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    query: Query<(), With<Mass>>,
+    mut sim_state: ResMut<SimState>,
+) {
+    sim_state.tick_counter += 1;
+    if sim_state.tick_counter % 60 == 0 {
+        let mut fps = 0.0;
+        if let Some(fps_diagnostic) =
+            diagnostics.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
+        {
+            if let Some(fps_value) = fps_diagnostic.smoothed() {
+                fps = fps_value;
+            }
+        }
+        let body_count = query.iter().count();
+        println!(
+            "[METRİKLER] FPS: {:.1} | Aktif Obje: {} | Hız: {:.1}x | Duraklatıldı: {}",
+            fps, body_count, sim_state.speed, sim_state.is_paused
+        );
+    }
 }
 
 fn setup_camera(mut commands: Commands) {
@@ -176,80 +260,75 @@ fn init_population(
     materials: Option<ResMut<Assets<StandardMaterial>>>,
     mut time: ResMut<Time<Virtual>>,
 ) {
-    // 1. Despawn all existing bodies
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
 
-    // 2. Reset tick count
     engine.current_tick = 0;
-
-    // Load genome configuration
     let mut genome = engine.current_genome;
-
-    // Load from disk if it's the very first initialization of the engine (generation == 1)
     if engine.generation == 1 {
-        if std::path::Path::new("best_genome.json").exists() {
-            match std::fs::read_to_string("best_genome.json") {
-                Ok(content) => match serde_json::from_str::<Genome>(&content) {
-                    Ok(loaded_genome) => {
-                        println!("Loaded optimized genome from best_genome.json");
-                        genome = loaded_genome;
-                        engine.current_genome = loaded_genome;
-                        engine.best_genome = loaded_genome;
-                    }
-                    Err(e) => {
-                        println!(
-                            "Failed to parse best_genome.json: {}. Using default parameters.",
-                            e
-                        );
-                        let fallback = Genome {
-                            pos_range: 800.0,
-                            vel_variance: 0.0,
-                            orbital_spin: 50.0,
-                            mass_max: 1000.0,
-                        };
-                        genome = fallback;
-                        engine.current_genome = fallback;
-                        engine.best_genome = fallback;
-                    }
-                },
-                Err(e) => {
-                    println!(
-                        "Failed to read best_genome.json: {}. Using default parameters.",
-                        e
-                    );
-                    let fallback = Genome {
-                        pos_range: 800.0,
-                        vel_variance: 0.0,
-                        orbital_spin: 50.0,
-                        mass_max: 1000.0,
-                    };
-                    genome = fallback;
-                    engine.current_genome = fallback;
-                    engine.best_genome = fallback;
-                }
-            }
+        if let Some((disk_genome, disk_fitness)) = load_best_genome() {
+            println!(
+                "Loaded optimized genome from best_genome.json with fitness: {:.6}",
+                disk_fitness
+            );
+            genome = disk_genome;
+            engine.current_genome = disk_genome;
+            engine.best_genome = disk_genome;
+            engine.best_fitness = disk_fitness;
         } else {
             println!("best_genome.json not found. Using default parameters.");
             let fallback = Genome {
                 pos_range: 800.0,
                 vel_variance: 0.0,
                 orbital_spin: 50.0,
-                mass_max: 1000.0,
+                mass_max: BODY_MASS_RANGE[1],
             };
             genome = fallback;
             engine.current_genome = fallback;
             engine.best_genome = fallback;
+            engine.best_fitness = -1.0;
+        }
+    } else {
+        // Island Model Migration: check if there is a better genome on disk
+        if let Some((disk_genome, disk_fitness)) = load_best_genome() {
+            if disk_fitness > engine.best_fitness {
+                println!(
+                    "[MİGRASYON] Diskten daha iyi bir genom tespit edildi! Fitness: {:.6} (Lokal En İyi: {:.6})",
+                    disk_fitness, engine.best_fitness
+                );
+                engine.best_fitness = disk_fitness;
+                engine.best_genome = disk_genome;
+
+                // Mutate from the migrated genome instead of old local best
+                let mut rng = rand::rng();
+                let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let spin_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
+                let vel_abs = rng.random_range(-0.5..=0.5);
+                let pos_abs = rng.random_range(-10.0..=10.0);
+
+                let mut mutated = disk_genome;
+                mutated.pos_range = (mutated.pos_range * pos_mutation + pos_abs)
+                    .max(200.0)
+                    .clamp(200.0, 3000.0);
+                mutated.vel_variance = (mutated.vel_variance * vel_mutation + vel_abs)
+                    .max(0.0)
+                    .clamp(0.0, 500.0);
+                mutated.orbital_spin = (mutated.orbital_spin * spin_mutation).clamp(-500.0, 500.0);
+                mutated.mass_max = (mutated.mass_max * mass_mutation).clamp(100.0, 10000.0);
+
+                engine.current_genome = mutated;
+                genome = mutated;
+            }
         }
     }
 
     let mut rng = rand::rng();
     time.set_relative_speed(SIMULATION_SPEED_FACTOR);
 
-    // CRITICAL: Request assets as Option to prevent crash on startup under MinimalPlugins
     let is_visual = meshes.is_some() && materials.is_some();
-
     let mut base_mesh = None;
     let mut material_palette = Vec::new();
     let palette_size = 256;
@@ -288,47 +367,34 @@ fn init_population(
     let mut sum_sq_dist = 0.0;
 
     for _ in 0..BODY_COUNT {
-        // Concentrate bodies heavily towards the center using a power-law distribution
         let radius_dist = if genome.pos_range > 0.0 {
             genome.pos_range * rng.random_range(0.0..1.0_f32).powi(2)
         } else {
             0.0
         };
 
-        // 2. Uniform angle around the Y axis
         let theta = rng.random_range(0.0..std::f32::consts::TAU);
-
-        // 3. Slight vertical thickness (e.g., +/- 2.5% of the pos_range)
         let y_thickness = genome.pos_range * 0.025;
         let y_pos = rng.random_range(-y_thickness..=y_thickness);
 
-        // 4. Final Position
         let pos = Vec3::new(radius_dist * theta.cos(), y_pos, radius_dist * theta.sin());
-
         sum_sq_dist += pos.length_squared();
 
-        // 1. Calculate tangential direction relative to the Y-axis (UP)
         let tangent = Vec3::Y.cross(pos).normalize_or_zero();
-
-        // 2. Define a core radius (e.g., 10% of the total disk size)
         let core_radius = genome.pos_range * 0.10;
         let distance = pos.length();
 
-        // v = spin * r / (r^2 + c^2)^(3/4)
-        // This yields v ~ r (Rigid Body) at the center, and v ~ 1/sqrt(r) (Keplerian) at the outer edges.
         let distance_sq = distance * distance;
         let core_sq = core_radius * core_radius;
         let orbit_speed =
             genome.orbital_spin * 300.0 * (distance / (distance_sq + core_sq).powf(0.75));
 
-        // 3. Add random noise (chaos) for the AI to optimize
         let random_noise = Vec3::new(
             rng.random_range(-genome.vel_variance..=genome.vel_variance),
             rng.random_range(-genome.vel_variance..=genome.vel_variance),
             rng.random_range(-genome.vel_variance..=genome.vel_variance),
         );
 
-        // 4. Final Velocity
         let vel = (tangent * orbit_speed) + random_noise;
 
         let mass_min = BODY_MASS_RANGE[0];
@@ -417,7 +483,6 @@ fn evaluate_generation(
 
         let pos_len = p.length();
         let vel_len = v.length();
-        // Handle zero lengths safely to completely prevent NaN
         if pos_len > 1e-6 && vel_len > 1e-6 {
             let norm_p = p / pos_len;
             let norm_v = v / vel_len;
@@ -426,7 +491,6 @@ fn evaluate_generation(
         }
     }
 
-    // 1. S_mass
     let s_mass = if total_mass > 0.0 {
         let ratio = max_mass / total_mass;
         (1.0 - ratio.powi(2)).max(0.0)
@@ -434,14 +498,12 @@ fn evaluate_generation(
         0.0
     };
 
-    // 2. S_orbit
     let s_orbit = if total_mass > 0.0 {
         (1.0 - (sum_orbit_terms / total_mass)).max(0.0)
     } else {
         0.0
     };
 
-    // 3. S_contain
     let current_rms_radius = if current_body_count > 0 {
         (sum_sq_dist / current_body_count as f32).sqrt()
     } else {
@@ -454,14 +516,12 @@ fn evaluate_generation(
     };
     let s_contain = 1.0 / (1.0 + (current_rms_radius / initial_rms));
 
-    // 4. S_survival
     let s_survival = if engine.initial_body_count > 0 {
         current_body_count as f32 / engine.initial_body_count as f32
     } else {
         0.0
     };
 
-    // Multiplicative Dimensionless Fitness
     let fitness = s_mass * s_orbit * s_contain * s_survival;
 
     println!("=== [Evaluation of Gen {}] ===", engine.generation);
@@ -483,13 +543,17 @@ fn evaluate_generation(
         engine.best_genome = engine.current_genome;
         println!("  *** NEW BEST GENOME SET! ***");
 
-        // Immediately serialize and save best genome to disk
-        match serde_json::to_string_pretty(&engine.best_genome) {
+        let shared = SharedGenome {
+            fitness,
+            genome: engine.best_genome,
+        };
+
+        match serde_json::to_string_pretty(&shared) {
             Ok(json_str) => {
                 if let Err(e) = std::fs::write("best_genome.json", json_str) {
                     println!("Warning: Failed to write best_genome.json: {}", e);
                 } else {
-                    println!("  [Saved best_genome.json to disk]");
+                    println!("  [Saved best_genome.json to disk with fitness {:.6}]", fitness);
                 }
             }
             Err(e) => {
@@ -511,20 +575,18 @@ fn mutate_generation(
 ) {
     let mut rng = rand::rng();
 
-    // Uniform percentage mutations in range [-0.15, +0.15]
     let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
     let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
     let spin_mutation = 1.0 + rng.random_range(-0.15..0.15);
     let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
 
-    // Absolute steps to break out of zero locks
     let vel_abs = rng.random_range(-0.5..=0.5);
     let pos_abs = rng.random_range(-10.0..=10.0);
 
     let mut new_genome = engine.best_genome;
     new_genome.pos_range = (new_genome.pos_range * pos_mutation + pos_abs)
         .max(200.0)
-        .clamp(200.0, 800.0); // GA'nın objeleri 800'den uzağa kaçırmasını YASAKLA
+        .clamp(200.0, 3000.0);
     new_genome.vel_variance = (new_genome.vel_variance * vel_mutation + vel_abs)
         .max(0.0)
         .clamp(0.0, 500.0);
@@ -559,7 +621,7 @@ fn mutate_generation(
 }
 
 fn update_physics(
-    time: Res<Time>,
+    time: Res<Time<Virtual>>,
     mut local_octree: Local<Option<octree::Octree>>,
     mut local_bodies: Local<Vec<body::Body>>,
     mut query: Query<(
@@ -570,6 +632,10 @@ fn update_physics(
         Option<&mut Transform>,
     )>,
 ) {
+    if time.is_paused() {
+        return;
+    }
+
     let dt = time.delta_secs().min(0.03);
 
     if local_octree.is_none() {
@@ -590,13 +656,11 @@ fn update_physics(
     let bounds = octree::Bounds3D::new_containing(bodies);
     octree.clear(bounds);
 
-    // Single Core Build
     for body in bodies.iter() {
         octree.insert(body.pos, body.mass);
     }
     octree.propagate();
 
-    // Rayon Parallel Gravity Calculation
     let octree_ref = &*octree;
     query
         .par_iter_mut()
@@ -652,13 +716,16 @@ fn handle_acceleration(
     )>,
     mut cache: Local<AccelerationCache>,
     mut prev_max_radius: Local<f32>,
+    time: Res<Time<Virtual>>,
 ) {
+    if time.is_paused() {
+        return;
+    }
+
     let cache = &mut *cache;
 
-    // Dynamic Cell size calculation (TUNNELING PREVENTION) using previous frame's max radius
     let cell_size = (*prev_max_radius * 2.2).max(10.0);
 
-    // Copy all entity data to a temporary vector for reading and precompute cells.
     let bodies = &mut cache.bodies;
     bodies.clear();
     let mut next_max_radius = 0.0f32;
@@ -679,35 +746,28 @@ fn handle_acceleration(
         return;
     }
 
-    // Union-Find series: Everyone is initially their own parent.
     let parent = &mut cache.parent;
     parent.clear();
     for i in 0..n {
         parent.push(i);
     }
 
-    // Union-Find helper func
     fn find(i: usize, parent: &mut [usize]) -> usize {
         if parent[i] == i {
             i
         } else {
             let root = find(parent[i], parent);
-            parent[i] = root; // Path compression
+            parent[i] = root;
             root
         }
     }
 
-    // --- SPATIAL HASHING (FLAT ARRAY / LINKED LIST GRID) ---
-
-    // Reset head array
     let head = &mut cache.head;
     head.fill(usize::MAX);
 
-    // Reset next array
     let next = &mut cache.next;
     next.clear();
 
-    // Place all bodies into the Flat Array Hash Grid O(N)
     for i in 0..n {
         let cell = bodies[i].5;
         let hash_idx = hash_cell(cell) & (HASH_SIZE - 1);
@@ -715,7 +775,6 @@ fn handle_acceleration(
         head[hash_idx] = i;
     }
 
-    // Only check 27 neighboring cells for intersection O(N)
     for i in 0..n {
         let p1 = bodies[i].1;
         let r1 = bodies[i].4;
@@ -725,7 +784,6 @@ fn handle_acceleration(
         let cell_y = cell.1;
         let cell_z = cell.2;
 
-        // Check your own cell and 26 neighboring cells
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -734,10 +792,8 @@ fn handle_acceleration(
 
                     let mut j = head[hash_idx];
                     while j != usize::MAX {
-                        // Prevent checking duplicate pairs or self-checking
                         if i < j {
                             let cell_j = bodies[j].5;
-                            // Resolve hash collisions: make sure body j is in the exact neighbor cell we are querying
                             if cell_j == neighbor_cell {
                                 let p2 = bodies[j].1;
                                 let r2 = bodies[j].4;
@@ -764,10 +820,7 @@ fn handle_acceleration(
             }
         }
     }
-    // --- SPATIAL HASHING BİTİŞ ---
 
-    // Calculation of the total mass and momentum of the clusters.
-    // Key: Root Index, Value: (Total Mass, Total Momentum (Mass * Vel), Center of Mass (Mass * Pos))
     let cluster_data = &mut cache.cluster_data;
     cluster_data.clear();
 
