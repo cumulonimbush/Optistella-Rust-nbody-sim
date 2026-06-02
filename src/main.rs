@@ -1,9 +1,10 @@
 mod body;
 mod config;
+mod genalg;
 mod octree;
 mod physics;
-mod genalg;
 
+use crate::config::*;
 use bevy::{
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     core_pipeline::tonemapping::Tonemapping,
@@ -12,10 +13,9 @@ use bevy::{
     time::TimeUpdateStrategy,
     window::WindowMode,
 };
-use rand::RngExt;
-use crate::config::*;
-use physics::*;
 use genalg::*;
+use physics::*;
+use rand::RngExt;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -46,7 +46,10 @@ fn main() {
             .add_plugins(FreeCameraPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, (setup_camera, spawn_lights))
-            .add_systems(Update, (handle_keyboard_controls, update_metrics, draw_octree_gizmos));
+            .add_systems(
+                Update,
+                (handle_keyboard_controls, update_metrics, draw_octree_gizmos),
+            );
     }
 
     app.init_resource::<GeneticEngine>()
@@ -173,7 +176,7 @@ fn spawn_lights(mut commands: Commands) {
 #[derive(Component)]
 struct TechnicText;
 
-fn spawn_text(mut commands: Commands) {
+fn spawn_text(mut commands: Commands, engine: ResMut<GeneticEngine>) {
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -181,27 +184,31 @@ fn spawn_text(mut commands: Commands) {
             left: px(10),
             ..default()
         },
-        children![Text::new(concat![
-            "ESC to focus/unfocus\n",
-            "wasd to move\n",
-            "arrow keys to change speed\n",
-            "ctrl to move faster\n",
-            "space to move up\n",
-            "shift to move down\n",
-            "p to pause\n",
-            "o to toggle gizmos\n",
-            "use mouse to look around"
-        ]),]
+        children![Text::new(format!(
+            concat!(
+                "Current Fitness {}\nControls:",
+                "ESC to focus/unfocus\n",
+                "wasd to move\n",
+                "arrow keys to change speed\n",
+                "ctrl to move faster\n",
+                "space to move up\n",
+                "shift to move down\n",
+                "p to pause\n",
+                "o to toggle gizmos\n",
+                "use mouse to look around"
+            ),
+            engine.best_fitness
+        )),],
     ));
-    
+
     commands.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(10),
-                right: px(10),
-                ..default()
-            },
-            children![(TechnicText, Text::new(""))],
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(10),
+            right: px(10),
+            ..default()
+        },
+        children![(TechnicText, Text::new(""))],
     ));
 }
 
