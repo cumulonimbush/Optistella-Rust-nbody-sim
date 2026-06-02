@@ -7,10 +7,10 @@ This project simulates the gravitational interactions and collisions of tens of 
 ## Visual Showcase
 
 ![Protoplanetary Accretion Disk](assets/fonts/images/accretion_disk.jpg)
-*Figure 2: Evolutionary output demonstrating a stable central protostar and an orbiting protoplanetary debris ring with HDR bloom and tonemapping.*
+*Figure 1: Evolutionary output demonstrating a stable central protostar and an orbiting protoplanetary debris ring with HDR bloom and tonemapping.*
 
 ![Barnes-Hut Octree Spatial Partitioning](assets/fonts/images/octree_visualization.jpg)
-*Figure 1: Real-time visualization of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.*
+*Figure 2: Real-time visualization of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.*
 
 ## Key Features
 
