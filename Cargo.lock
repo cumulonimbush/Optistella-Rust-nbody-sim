@@ -347,19 +347,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy-deneme"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "glam",
- "mimalloc",
- "rand 0.10.1",
- "rayon",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "bevy_a11y"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3333,6 +3320,19 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
+]
+
+[[package]]
+name = "n-body-sim"
+version = "1.0.0"
+dependencies = [
+ "bevy",
+ "glam",
+ "mimalloc",
+ "rand 0.10.1",
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
