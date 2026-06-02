@@ -99,11 +99,15 @@ impl Default for GeneticEngine {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct PhysicsOctree(pub Option<octree::Octree>);
+
 #[derive(Resource)]
 pub struct SimState {
     pub speed: f32,
     pub is_paused: bool,
     pub tick_counter: u32,
+    pub show_octree: bool,
 }
 
 impl Default for SimState {
@@ -112,6 +116,7 @@ impl Default for SimState {
             speed: 1.0,
             is_paused: false,
             tick_counter: 0,
+            show_octree: false,
         }
     }
 }
@@ -142,10 +147,14 @@ fn main() {
             .add_plugins(FreeCameraPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, (setup_camera, spawn_lights))
-            .add_systems(Update, (handle_keyboard_controls, print_metrics));
+            .add_systems(
+                Update,
+                (handle_keyboard_controls, print_metrics, draw_octree_gizmos),
+            );
     }
 
     app.init_resource::<GeneticEngine>()
+        .init_resource::<PhysicsOctree>()
         .init_state::<AppState>()
         .add_systems(OnEnter(AppState::Init), init_population)
         .add_systems(
@@ -172,6 +181,18 @@ fn handle_keyboard_controls(
     mut sim_state: ResMut<SimState>,
     mut time: ResMut<Time<Virtual>>,
 ) {
+    if keyboard_input.just_pressed(KeyCode::KeyO) {
+        sim_state.show_octree = !sim_state.show_octree;
+        println!(
+            "[SİSTEM] Octree Debug Görünümü: {}",
+            if sim_state.show_octree {
+                "AÇIK"
+            } else {
+                "KAPALI"
+            }
+        );
+    }
+
     if keyboard_input.just_pressed(KeyCode::KeyP) {
         sim_state.is_paused = !sim_state.is_paused;
         if sim_state.is_paused {
@@ -553,7 +574,10 @@ fn evaluate_generation(
                 if let Err(e) = std::fs::write("best_genome.json", json_str) {
                     println!("Warning: Failed to write best_genome.json: {}", e);
                 } else {
-                    println!("  [Saved best_genome.json to disk with fitness {:.6}]", fitness);
+                    println!(
+                        "  [Saved best_genome.json to disk with fitness {:.6}]",
+                        fitness
+                    );
                 }
             }
             Err(e) => {
@@ -622,7 +646,7 @@ fn mutate_generation(
 
 fn update_physics(
     time: Res<Time<Virtual>>,
-    mut local_octree: Local<Option<octree::Octree>>,
+    mut global_octree: ResMut<PhysicsOctree>,
     mut local_bodies: Local<Vec<body::Body>>,
     mut query: Query<(
         &mut Position,
@@ -638,10 +662,10 @@ fn update_physics(
 
     let dt = time.delta_secs().min(0.03);
 
-    if local_octree.is_none() {
-        *local_octree = Some(octree::Octree::new(0.5, 2.0));
+    if global_octree.0.is_none() {
+        global_octree.0 = Some(octree::Octree::new(0.5, 2.0));
     }
-    let octree = local_octree.as_mut().unwrap();
+    let octree = global_octree.0.as_mut().unwrap();
 
     let bodies = &mut *local_bodies;
     bodies.clear();
@@ -700,6 +724,29 @@ impl Default for AccelerationCache {
             head: vec![usize::MAX; HASH_SIZE],
             next: Vec::new(),
             cluster_data: HashMap::new(),
+        }
+    }
+}
+
+fn draw_octree_gizmos(
+    global_octree: Res<PhysicsOctree>,
+    sim_state: Res<SimState>,
+    mut gizmos: Gizmos,
+) {
+    if !sim_state.show_octree {
+        return;
+    }
+
+    if let Some(octree) = &global_octree.0 {
+        for node in &octree.nodes {
+            // Draw only the "Branch" nodes that divide the space into sub-parts
+            if node.is_branch() {
+                gizmos.cube(
+                    Transform::from_translation(node.bounds.center)
+                        .with_scale(Vec3::splat(node.bounds.size)),
+                    Color::srgba(0.0, 1.0, 0.2, 0.1), //translucent neon green
+                );
+            }
         }
     }
 }
