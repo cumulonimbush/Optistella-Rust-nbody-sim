@@ -1,9 +1,9 @@
 {
-  "fitness": 0.20579676,
+  "fitness": 2.4619803e-7,
   "genome": {
-    "pos_range": 1879.9025,
+    "pos_range": 835.4469,
     "vel_variance": 0.0,
-    "orbital_spin": 41.143085,
-    "mass_max": 490.8955
+    "orbital_spin": 44.461746,
+    "mass_max": 1040.7013
   }
 }

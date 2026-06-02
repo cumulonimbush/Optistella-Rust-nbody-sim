@@ -1,7 +1,7 @@
-use bevy::prelude::*;
 use crate::config::*;
-use rand::RngExt;
 use crate::physics::*;
+use bevy::prelude::*;
+use rand::RngExt;
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AppState {
@@ -207,6 +207,30 @@ pub fn init_population(
 
     let mut sum_sq_dist = 0.0;
 
+    // Place the Sun at the center of the system.
+    // This will prevent bodies from flying out and force them to orbit
+    let sun_mass = genome.mass_max * 150.0; // 150 times heavier than the largest planet
+    let sun_radius = (sun_mass / 100.0).cbrt().max(2.0);
+
+    if is_visual {
+        commands.spawn((
+            Mesh3d(base_mesh.as_ref().unwrap().clone()),
+            MeshMaterial3d(material_palette[255].clone()), // En parlak materyal
+            Transform::from_translation(Vec3::ZERO).with_scale(Vec3::splat(sun_radius)),
+            Position(Vec3::ZERO),
+            Velocity(Vec3::ZERO),
+            Mass(sun_mass),
+            Radius(sun_radius),
+        ));
+    } else {
+        commands.spawn((
+            Position(Vec3::ZERO),
+            Velocity(Vec3::ZERO),
+            Mass(sun_mass),
+            Radius(sun_radius),
+        ));
+    }
+
     for _ in 0..BODY_COUNT {
         let radius_dist = if genome.pos_range > 0.0 {
             genome.pos_range * rng.random_range(0.0..1.0_f32).powi(2)
@@ -355,7 +379,14 @@ pub fn evaluate_generation(
     } else {
         1.0
     };
-    let s_contain = 1.0 / (1.0 + (current_rms_radius / initial_rms));
+
+    // If the universe expands beyond the initial diameter, it will be penalized quadratically.
+    // If the universe expands 2 times, its score will drop to 25%, if it expands 3 times, it will drop to 11%, and if it escapes quickly, it will drop to 0%.
+    let s_contain = if current_rms_radius > initial_rms {
+        (initial_rms / current_rms_radius).powi(2)
+    } else {
+        1.0 // No penalty if it collapses or is the same size
+    };
 
     let s_survival = if engine.initial_body_count > 0 {
         current_body_count as f32 / engine.initial_body_count as f32
@@ -394,7 +425,10 @@ pub fn evaluate_generation(
                 if let Err(e) = std::fs::write("best_genome.json", json_str) {
                     println!("Warning: Failed to write best_genome.json: {}", e);
                 } else {
-                    println!("  [Saved best_genome.json to disk with fitness {:.6}]", fitness);
+                    println!(
+                        "  [Saved best_genome.json to disk with fitness {:.6}]",
+                        fitness
+                    );
                 }
             }
             Err(e) => {
