@@ -46,10 +46,11 @@ fn main() {
             .add_plugins(FreeCameraPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, (setup_camera, spawn_lights))
-            .add_systems(Update, (handle_keyboard_controls, update_metrics));
+            .add_systems(Update, (handle_keyboard_controls, update_metrics, draw_octree_gizmos));
     }
 
     app.init_resource::<GeneticEngine>()
+        .init_resource::<PhysicsOctree>()
         .init_state::<AppState>()
         .add_systems(OnEnter(AppState::Init), init_population)
         .add_systems(Startup, spawn_text)
@@ -77,6 +78,17 @@ fn handle_keyboard_controls(
     mut sim_state: ResMut<SimState>,
     mut time: ResMut<Time<Virtual>>,
 ) {
+    if keyboard_input.just_pressed(KeyCode::KeyO) {
+        sim_state.show_octree = !sim_state.show_octree;
+        println!(
+            "[SİSTEM] Octree Debug Görünümü: {}",
+            if sim_state.show_octree {
+                "AÇIK"
+            } else {
+                "KAPALI"
+            }
+        );
+    }
     if keyboard_input.just_pressed(KeyCode::KeyP) {
         sim_state.is_paused = !sim_state.is_paused;
         if sim_state.is_paused {
@@ -177,6 +189,7 @@ fn spawn_text(mut commands: Commands) {
             "space to move up\n",
             "shift to move down\n",
             "p to pause\n",
+            "o to toggle gizmos\n",
             "use mouse to look around"
         ]),]
     ));
@@ -190,4 +203,27 @@ fn spawn_text(mut commands: Commands) {
             },
             children![(TechnicText, Text::new(""))],
     ));
+}
+
+fn draw_octree_gizmos(
+    global_octree: Res<PhysicsOctree>,
+    sim_state: Res<SimState>,
+    mut gizmos: Gizmos,
+) {
+    if !sim_state.show_octree {
+        return;
+    }
+
+    if let Some(octree) = &global_octree.0 {
+        for node in &octree.nodes {
+            // Draw only the "Branch" nodes that divide the space into sub-parts
+            if node.is_branch() {
+                gizmos.cube(
+                    Transform::from_translation(node.bounds.center)
+                        .with_scale(Vec3::splat(node.bounds.size)),
+                    Color::srgba(0.0, 1.0, 0.2, 0.1), //translucent neon green
+                );
+            }
+        }
+    }
 }

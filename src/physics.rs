@@ -15,9 +15,12 @@ pub struct Mass(pub f32);
 #[derive(Component, Debug)]
 pub struct Radius(pub f32);
 
+#[derive(Resource, Default)]
+pub struct PhysicsOctree(pub Option<Octree>);
+
 pub fn update_physics(
     time: Res<Time<Virtual>>,
-    mut local_octree: Local<Option<Octree>>,
+    mut global_octree: ResMut<PhysicsOctree>,
     mut local_bodies: Local<Vec<Body>>,
     mut query: Query<(
         &mut Position,
@@ -33,10 +36,10 @@ pub fn update_physics(
 
     let dt = time.delta_secs().min(0.03);
 
-    if local_octree.is_none() {
-        *local_octree = Some(Octree::new(0.5, 2.0));
+    if global_octree.0.is_none() {
+        global_octree.0 = Some(Octree::new(0.5, 2.0));
     }
-    let octree = local_octree.as_mut().unwrap();
+    let octree = global_octree.0.as_mut().unwrap();
 
     let bodies = &mut *local_bodies;
     bodies.clear();

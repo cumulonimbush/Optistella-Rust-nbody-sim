@@ -78,6 +78,7 @@ pub struct SimState {
     pub speed: f32,
     pub is_paused: bool,
     pub tick_counter: u32,
+    pub show_octree: bool,
 }
 
 impl Default for SimState {
@@ -86,6 +87,7 @@ impl Default for SimState {
             speed: 1.0,
             is_paused: false,
             tick_counter: 0,
+            show_octree: false,
         }
     }
 }
