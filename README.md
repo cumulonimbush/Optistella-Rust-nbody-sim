@@ -4,6 +4,14 @@ A high-performance 3D N-Body physics engine and evolutionary simulation built in
 
 This project simulates the gravitational interactions and collisions of tens of thousands of bodies to model the formation of protoplanetary accretion disks. To bypass manual parameter tuning, the project integrates a Genetic Algorithm (GA) that autonomously evolves the initial spawning conditions (mass distribution, orbital spin, velocity variance, and spatial range) to generate stable, Keplerian orbital systems.
 
+## Visual Showcase
+
+![Protoplanetary Accretion Disk](assets/accretion_disk.jpg)
+*Figure 2: Evolutionary output demonstrating a stable central protostar and an orbiting protoplanetary debris ring with HDR bloom and tonemapping.*
+
+![Barnes-Hut Octree Spatial Partitioning](assets/octree_visualization.jpg)
+*Figure 1: Real-time visualization of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.*
+
 ## Key Features
 
 * **Barnes-Hut Octree Gravity:** Reduces the gravitational computational complexity from $O(N^2)$ to $O(N \log N)$.
@@ -23,10 +31,6 @@ When running the simulation normally (without the training flag), you can naviga
 * **`Arrow Right` / `Arrow Left`**: Increase / Decrease simulation speed (Time step multiplier)
 * **`P`**: Pause / Resume physics simulation
 * **`O`**: Toggle Octree spatial partitioning visualisation (Gizmos)
-
- <img width="1919" height="1199" alt="Untitled2" src="https://github.com/user-attachments/assets/c48fab54-7f03-4a12-89d5-7aea9b270d98" />
- <img width="1919" height="1199" alt="Untitled" src="https://github.com/user-attachments/assets/050ca5a2-d200-484b-9209-b48dfbadf515" />
-
 
 ## Usage & Execution
 
