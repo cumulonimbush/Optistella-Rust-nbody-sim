@@ -24,20 +24,57 @@ pub struct Genome {
 pub struct SharedGenome {
     pub fitness: f32,
     pub genome: Genome,
+    #[serde(default)]
+    pub generation: usize,
 }
 
-pub fn load_best_genome() -> Option<(Genome, f32)> {
-    if std::path::Path::new("best_genome.json").exists() {
-        if let Ok(content) = std::fs::read_to_string("best_genome.json") {
+pub fn load_best_genome() -> Option<(Genome, f32, usize)> {
+    let path = std::path::Path::new("best_genome.json");
+    if !path.exists() {
+        return None;
+    }
+    // Retry up to 5 times in case of sharing violations/interleaved writes
+    for _ in 0..5 {
+        if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(shared) = serde_json::from_str::<SharedGenome>(&content) {
-                return Some((shared.genome, shared.fitness));
+                return Some((shared.genome, shared.fitness, shared.generation));
             }
             if let Ok(genome) = serde_json::from_str::<Genome>(&content) {
-                return Some((genome, -1.0));
+                return Some((genome, -1.0, 0));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    None
+}
+
+pub fn save_best_genome(shared: &SharedGenome) -> Result<(), std::io::Error> {
+    let json_str = serde_json::to_string_pretty(shared)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    
+    // Use process ID to create a unique temp file name
+    let temp_name = format!("best_genome.json.{}.tmp", std::process::id());
+    let temp_path = std::path::Path::new(&temp_name);
+    let target_path = std::path::Path::new("best_genome.json");
+
+    std::fs::write(temp_path, json_str)?;
+
+    let mut rename_err = None;
+    for _ in 0..5 {
+        match std::fs::rename(temp_path, target_path) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                rename_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
     }
-    None
+
+    // Clean up temp file if rename failed
+    let _ = std::fs::remove_file(temp_path);
+    Err(rename_err.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Other, "Rename failed after retries")
+    }))
 }
 
 #[derive(Resource)]
@@ -48,6 +85,7 @@ pub struct GeneticEngine {
     pub current_genome: Genome,
     pub best_genome: Genome,
     pub best_fitness: f32,
+    pub best_generation: usize,
     pub initial_body_count: usize,
     pub initial_rms_radius: f32,
 }
@@ -67,6 +105,7 @@ impl Default for GeneticEngine {
             current_genome: initial_genome,
             best_genome: initial_genome,
             best_fitness: -1.0,
+            best_generation: 1,
             initial_body_count: BODY_COUNT as usize,
             initial_rms_radius: 1.0,
         }
@@ -108,15 +147,16 @@ pub fn init_population(
     engine.current_tick = 0;
     let mut genome = engine.current_genome;
     if engine.generation == 1 {
-        if let Some((disk_genome, disk_fitness)) = load_best_genome() {
+        if let Some((disk_genome, disk_fitness, disk_gen)) = load_best_genome() {
             println!(
-                "Loaded optimized genome from best_genome.json with fitness: {:.6}",
-                disk_fitness
+                "Loaded optimized genome from best_genome.json with fitness: {:.6} (Gen: {})",
+                disk_fitness, disk_gen
             );
             genome = disk_genome;
             engine.current_genome = disk_genome;
             engine.best_genome = disk_genome;
             engine.best_fitness = disk_fitness;
+            engine.best_generation = disk_gen;
         } else {
             println!("best_genome.json not found. Using default parameters.");
             let fallback = Genome {
@@ -129,17 +169,19 @@ pub fn init_population(
             engine.current_genome = fallback;
             engine.best_genome = fallback;
             engine.best_fitness = -1.0;
+            engine.best_generation = 1;
         }
     } else {
         // Island Model Migration: check if there is a better genome on disk
-        if let Some((disk_genome, disk_fitness)) = load_best_genome() {
+        if let Some((disk_genome, disk_fitness, disk_gen)) = load_best_genome() {
             if disk_fitness > engine.best_fitness {
                 println!(
-                    "[MİGRASYON] Diskten daha iyi bir genom tespit edildi! Fitness: {:.6} (Lokal En İyi: {:.6})",
-                    disk_fitness, engine.best_fitness
+                    "[MİGRASYON] Diskten daha iyi bir genom tespit edildi! Fitness: {:.6} (Gen: {}) (Lokal En İyi: {:.6})",
+                    disk_fitness, disk_gen, engine.best_fitness
                 );
                 engine.best_fitness = disk_fitness;
                 engine.best_genome = disk_genome;
+                engine.best_generation = disk_gen;
 
                 // Mutate from the migrated genome instead of old local best
                 let mut rng = rand::rng();
@@ -410,30 +452,61 @@ pub fn evaluate_generation(
         current_rms_radius, engine.initial_rms_radius
     );
 
-    if fitness > engine.best_fitness {
-        engine.best_fitness = fitness;
-        engine.best_genome = engine.current_genome;
-        println!("  *** NEW BEST GENOME SET! ***");
+    // Read the current best genome on disk to prevent overwriting a better score (Island Model coordination)
+    let (disk_genome, disk_fitness, disk_gen) = load_best_genome()
+        .map(|(g, f, g_gen)| (Some(g), f, g_gen))
+        .unwrap_or((None, -1.0, 0));
 
+    if fitness > engine.best_fitness || disk_fitness > engine.best_fitness {
+        // Something is better than our local best!
+        if disk_fitness > fitness {
+            // The disk has the absolute best genome. Migrate it locally.
+            if let Some(dg) = disk_genome {
+                engine.best_fitness = disk_fitness;
+                engine.best_genome = dg;
+                engine.best_generation = disk_gen;
+                println!(
+                    "  [MİGRASYON] Diskten daha iyi bir genom tespit edildi! Fitness: {:.6} (Gen: {}) (Lokal Aday: {:.6})",
+                    disk_fitness, disk_gen, fitness
+                );
+            }
+        } else {
+            // Our new fitness is the absolute best (or equal to disk, but better than local). Save to disk.
+            engine.best_fitness = fitness;
+            engine.best_genome = engine.current_genome;
+            engine.best_generation = engine.generation;
+            println!("  *** NEW BEST GENOME SET! (Gen {}) ***", engine.generation);
+
+            let shared = SharedGenome {
+                fitness,
+                genome: engine.best_genome,
+                generation: engine.generation,
+            };
+            if let Err(e) = save_best_genome(&shared) {
+                println!("Warning: Failed to write best_genome.json: {}", e);
+            } else {
+                println!(
+                    "  [Saved best_genome.json to disk with fitness {:.6} from Gen {}]",
+                    fitness, engine.generation
+                );
+            }
+        }
+    } else if engine.best_fitness > disk_fitness {
+        // Our local best is better than what's on disk (e.g. disk was deleted or corrupted).
+        // Restore/write local best to disk.
+        println!("  [KORUMA] Lokal en iyi genom disktekinden daha iyi. Diske yazılıyor...");
         let shared = SharedGenome {
-            fitness,
+            fitness: engine.best_fitness,
             genome: engine.best_genome,
+            generation: engine.best_generation,
         };
-
-        match serde_json::to_string_pretty(&shared) {
-            Ok(json_str) => {
-                if let Err(e) = std::fs::write("best_genome.json", json_str) {
-                    println!("Warning: Failed to write best_genome.json: {}", e);
-                } else {
-                    println!(
-                        "  [Saved best_genome.json to disk with fitness {:.6}]",
-                        fitness
-                    );
-                }
-            }
-            Err(e) => {
-                println!("Warning: Failed to serialize best genome: {}", e);
-            }
+        if let Err(e) = save_best_genome(&shared) {
+            println!("Warning: Failed to write best_genome.json: {}", e);
+        } else {
+            println!(
+                "  [Saved best_genome.json to disk with fitness {:.6} from Gen {}]",
+                engine.best_fitness, engine.best_generation
+            );
         }
     }
     println!(
