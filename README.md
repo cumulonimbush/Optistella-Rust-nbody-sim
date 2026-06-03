@@ -6,11 +6,23 @@ This project simulates the gravitational interactions and collisions of tens of 
 
 ## Visual Showcase
 
-![Protoplanetary Accretion Disk](assets/fonts/images/accretion_disk.jpg)
-*Figure 1: Evolutionary output demonstrating a stable central protostar and an orbiting protoplanetary debris ring with HDR bloom and tonemapping.*
+<p align="center">
+  <img src="assets/fonts/images/accretion_disk.jpg" width="85%" alt="Protoplanetary Accretion Disk">
+  <br>
+  <em>Figure 1: Evolutionary output demonstrating a stable central protostar and an orbiting protoplanetary debris ring with HDR bloom and tonemapping.</em>
+</p>
 
-![Barnes-Hut Octree Spatial Partitioning](assets/fonts/images/octree_visualization.jpg)
-*Figure 2: Real-time visualization of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.*
+<p align="center">
+  <img src="assets/fonts/images/octree_visualization.jpg" width="85%" alt="Barnes-Hut Octree Spatial Partitioning">
+  <br>
+  <em>Figure 2: Real-time visualization of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.</em>
+</p>
+
+<p align="center">
+  <img src="assets/fonts/images/simulation_metrics.jpg" width="85%" alt="Real-time Simulation Metrics and UI">
+  <br>
+  <em>Figure 3: In-engine diagnostic overlay displaying real-time performance metrics. The physics engine maintains stable framerates while resolving over 11,000 active bodies, showcasing the high fitness score and orbital stability achieved by the Genetic Algorithm.</em>
+</p>
 
 ## Key Features
 
