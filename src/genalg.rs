@@ -157,7 +157,7 @@ pub fn init_population(
             engine.best_genome = disk_genome;
             engine.best_fitness = disk_fitness;
             engine.best_generation = disk_gen;
-            engine.generation = disk_gen + 1;
+            engine.generation = disk_gen;
         } else {
             println!("best_genome.json not found. Using default parameters.");
             let fallback = Genome {
@@ -183,7 +183,7 @@ pub fn init_population(
                 engine.best_fitness = disk_fitness;
                 engine.best_genome = disk_genome;
                 engine.best_generation = disk_gen;
-                engine.generation = disk_gen + 1;
+                engine.generation = disk_gen;
 
                 // Mutate from the migrated genome instead of old local best
                 let mut rng = rand::rng();
@@ -475,24 +475,24 @@ pub fn evaluate_generation(
             }
         } else {
             // Our new fitness is the absolute best (or equal to disk, but better than local). Save to disk.
-            let next_gen = disk_gen + 1;
+            let new_gen = disk_gen + 1;
             engine.best_fitness = fitness;
             engine.best_genome = engine.current_genome;
-            engine.best_generation = next_gen;
-            engine.generation = next_gen;
-            println!("  *** NEW BEST GENOME SET! (Gen {}) ***", next_gen);
+            engine.best_generation = new_gen;
+            engine.generation = new_gen;
+            println!("  *** NEW BEST GENOME SET! (Gen {}) ***", new_gen);
 
             let shared = SharedGenome {
                 fitness,
                 genome: engine.best_genome,
-                generation: next_gen,
+                generation: new_gen,
             };
             if let Err(e) = save_best_genome(&shared) {
                 println!("Warning: Failed to write best_genome.json: {}", e);
             } else {
                 println!(
                     "  [Saved best_genome.json to disk with fitness {:.6} from Gen {}]",
-                    fitness, next_gen
+                    fitness, new_gen
                 );
             }
         }
@@ -500,17 +500,20 @@ pub fn evaluate_generation(
         // Our local best is better than what's on disk (e.g. disk was deleted or corrupted).
         // Restore/write local best to disk.
         println!("  [KORUMA] Lokal en iyi genom disktekinden daha iyi. Diske yazılıyor...");
+        let new_gen = disk_gen + 1;
+        engine.best_generation = new_gen;
+        engine.generation = new_gen;
         let shared = SharedGenome {
             fitness: engine.best_fitness,
             genome: engine.best_genome,
-            generation: engine.best_generation,
+            generation: new_gen,
         };
         if let Err(e) = save_best_genome(&shared) {
             println!("Warning: Failed to write best_genome.json: {}", e);
         } else {
             println!(
                 "  [Saved best_genome.json to disk with fitness {:.6} from Gen {}]",
-                engine.best_fitness, engine.best_generation
+                engine.best_fitness, new_gen
             );
         }
     }
@@ -528,13 +531,13 @@ pub fn mutate_generation(
 ) {
     let mut rng = rand::rng();
 
-    // 1. Simulated Annealing (Mutation Decay)
-    // 2500. nesile doğru yaklaşırken mutasyon aralığı %15'ten %0.5'e (fine-tuning) düşer.
+    // Simulated Annealing (Mutation Decay)
+    // As we approach the 2500th generation, the mutation range decreases from 15% to 0.5% (fine-tuning).
     let progress = (engine.generation as f32 / 2500.0).clamp(0.0, 1.0);
     let dynamic_mutation_rate = 0.15 * (1.0 - progress) + 0.005 * progress;
 
-    // 2. Hypermutation (Escape Local Minima)
-    // %5 ihtimalle, yerel kuyudan (local optimum) çıkmak için %40'lık devasa bir sıçrama yapar.
+    // Hypermutation (Escape Local Minima)
+    // 5% chance, a huge 40% jump to escape the local optimum.
     let is_hyper = rng.random_range(0.0..1.0) < 0.05;
     let mut_rate = if is_hyper {
         0.40
