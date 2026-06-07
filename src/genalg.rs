@@ -51,7 +51,7 @@ pub fn load_best_genome() -> Option<(Genome, f32, usize)> {
 pub fn save_best_genome(shared: &SharedGenome) -> Result<(), std::io::Error> {
     let json_str = serde_json::to_string_pretty(shared)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    
+
     // Use process ID to create a unique temp file name
     let temp_name = format!("best_genome.json.{}.tmp", std::process::id());
     let temp_path = std::path::Path::new(&temp_name);
@@ -157,6 +157,7 @@ pub fn init_population(
             engine.best_genome = disk_genome;
             engine.best_fitness = disk_fitness;
             engine.best_generation = disk_gen;
+            engine.generation = disk_gen + 1;
         } else {
             println!("best_genome.json not found. Using default parameters.");
             let fallback = Genome {
@@ -182,6 +183,7 @@ pub fn init_population(
                 engine.best_fitness = disk_fitness;
                 engine.best_genome = disk_genome;
                 engine.best_generation = disk_gen;
+                engine.generation = disk_gen + 1;
 
                 // Mutate from the migrated genome instead of old local best
                 let mut rng = rand::rng();
@@ -465,6 +467,7 @@ pub fn evaluate_generation(
                 engine.best_fitness = disk_fitness;
                 engine.best_genome = dg;
                 engine.best_generation = disk_gen;
+                engine.generation = disk_gen;
                 println!(
                     "  [MİGRASYON] Diskten daha iyi bir genom tespit edildi! Fitness: {:.6} (Gen: {}) (Lokal Aday: {:.6})",
                     disk_fitness, disk_gen, fitness
@@ -472,22 +475,24 @@ pub fn evaluate_generation(
             }
         } else {
             // Our new fitness is the absolute best (or equal to disk, but better than local). Save to disk.
+            let next_gen = disk_gen + 1;
             engine.best_fitness = fitness;
             engine.best_genome = engine.current_genome;
-            engine.best_generation = engine.generation;
-            println!("  *** NEW BEST GENOME SET! (Gen {}) ***", engine.generation);
+            engine.best_generation = next_gen;
+            engine.generation = next_gen;
+            println!("  *** NEW BEST GENOME SET! (Gen {}) ***", next_gen);
 
             let shared = SharedGenome {
                 fitness,
                 genome: engine.best_genome,
-                generation: engine.generation,
+                generation: next_gen,
             };
             if let Err(e) = save_best_genome(&shared) {
                 println!("Warning: Failed to write best_genome.json: {}", e);
             } else {
                 println!(
                     "  [Saved best_genome.json to disk with fitness {:.6} from Gen {}]",
-                    fitness, engine.generation
+                    fitness, next_gen
                 );
             }
         }
@@ -523,10 +528,24 @@ pub fn mutate_generation(
 ) {
     let mut rng = rand::rng();
 
-    let pos_mutation = 1.0 + rng.random_range(-0.15..0.15);
-    let vel_mutation = 1.0 + rng.random_range(-0.15..0.15);
-    let spin_mutation = 1.0 + rng.random_range(-0.15..0.15);
-    let mass_mutation = 1.0 + rng.random_range(-0.15..0.15);
+    // 1. Simulated Annealing (Mutation Decay)
+    // 2500. nesile doğru yaklaşırken mutasyon aralığı %15'ten %0.5'e (fine-tuning) düşer.
+    let progress = (engine.generation as f32 / 2500.0).clamp(0.0, 1.0);
+    let dynamic_mutation_rate = 0.15 * (1.0 - progress) + 0.005 * progress;
+
+    // 2. Hypermutation (Escape Local Minima)
+    // %5 ihtimalle, yerel kuyudan (local optimum) çıkmak için %40'lık devasa bir sıçrama yapar.
+    let is_hyper = rng.random_range(0.0..1.0) < 0.05;
+    let mut_rate = if is_hyper {
+        0.40
+    } else {
+        dynamic_mutation_rate
+    };
+
+    let pos_mutation = 1.0 + rng.random_range(-mut_rate..mut_rate);
+    let vel_mutation = 1.0 + rng.random_range(-mut_rate..mut_rate);
+    let spin_mutation = 1.0 + rng.random_range(-mut_rate..mut_rate);
+    let mass_mutation = 1.0 + rng.random_range(-mut_rate..mut_rate);
 
     let vel_abs = rng.random_range(-0.5..=0.5);
     let pos_abs = rng.random_range(-10.0..=10.0);
@@ -548,6 +567,19 @@ pub fn mutate_generation(
         "--- [Applying Mutation to Best Genome for Gen {}] ---",
         engine.generation
     );
+
+    if is_hyper {
+        println!(
+            "  [!] HYPERMUTATION TRIGGERED! Escaping local optimum with ±{:.1}% leap...",
+            mut_rate * 100.0
+        );
+    } else {
+        println!(
+            "  [Annealing] Fine-tuning with dynamic rate: ±{:.2}%",
+            mut_rate * 100.0
+        );
+    }
+
     println!(
         "  Mutated pos_range:    {:.2} -> {:.2}",
         engine.best_genome.pos_range, new_genome.pos_range
