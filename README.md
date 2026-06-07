@@ -21,7 +21,7 @@ This project simulates the gravitational interactions and collisions of tens of 
 <p align="center">
   <img src="assets/fonts/images/simulation_metrics.jpg" width="85%" alt="Real-time Simulation Metrics and UI">
   <br>
-  <em>Figure 3: In-engine diagnostic overlay displaying real-time performance metrics. The physics engine maintains stable framerates while resolving over 11,000 active bodies, showcasing the high fitness score and orbital stability achieved by the Genetic Algorithm. The FPS benchmark tests and the training process were conducted on a Ryzen 7 8845HS CPU and an RTX 4060 GPU with 8 GB of VRAM. </em>
+  <em>Figure 3: In-engine diagnostic overlay displaying real-time performance metrics. The physics engine maintains stable framerates while resolving over 11,000 active bodies, showcasing the high fitness score and orbital stability achieved by the Genetic Algorithm. The FPS benchmark tests and the training process were conducted on a Ryzen 7 8845HS CPU and an RTX 4060 GPU. </em>
 </p>
 
 ## Key Features
