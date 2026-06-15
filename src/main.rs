@@ -43,7 +43,7 @@ fn main() {
             }))
             .add_plugins(FreeCameraPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
-            .add_systems(Startup, (setup_camera, spawn_lights))
+            .add_systems(Startup, setup_camera)
             .add_systems(
                 Update,
                 (handle_keyboard_controls, update_metrics, draw_octree_gizmos),
@@ -165,17 +165,12 @@ fn setup_camera(mut commands: Commands) {
             keyboard_key_toggle_cursor_grab: KeyCode::Escape,
             ..default()
         },
-    ));
-}
-
-fn spawn_lights(mut commands: Commands) {
-    commands.spawn((
         AmbientLight {
             color: Color::srgb(1.0, 1.0, 1.0),
             brightness: 200.0,
             affects_lightmapped_meshes: false,
         },
-        Transform::from_xyz(0.0, 2.0, 0.0),
+        IsDefaultUiCamera,
     ));
 }
 
