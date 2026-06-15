@@ -15,13 +15,19 @@ This project simulates the gravitational interactions and collisions of tens of 
 <p align="center">
   <img src="assets/fonts/images/octree_visualization.jpg" width="85%" alt="Barnes-Hut Octree Spatial Partitioning">
   <br>
-  <em>Figure 2: Real-time visualisation of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.</em>
+  <em>Figure 2: Real-time visualization of the Barnes-Hut Octree structure dynamically dividing spatial volumes based on mass density.</em>
 </p>
 
 <p align="center">
   <img src="assets/fonts/images/simulation_metrics.jpg" width="85%" alt="Real-time Simulation Metrics and UI">
   <br>
-  <em>Figure 3: In-engine diagnostic overlay displaying real-time performance metrics. The physics engine maintains stable framerates while resolving over 11,000 active bodies, showcasing the high fitness score and orbital stability achieved by the Genetic Algorithm. The FPS benchmark tests and the training process were conducted on a Ryzen 7 8845HS CPU and an RTX 4060 GPU. </em>
+  <em>Figure 3: In-engine diagnostic overlay displaying real-time performance metrics. The physics engine maintains stable framerates while resolving over 11,000 active bodies, showcasing the high fitness score and orbital stability achieved by the Genetic Algorithm.</em>
+</p>
+
+<p align="center">
+  <img src="assets/fonts/images/flamegraph.jpg" width="85%" alt="CPU Time Flamegraph">
+  <br>
+  <em>Figure 4: A flamegraph visualization detailing the CPU time distribution and performance profiling of the physics simulation.</em>
 </p>
 
 ## Key Features
@@ -29,8 +35,8 @@ This project simulates the gravitational interactions and collisions of tens of 
 - **Barnes-Hut Octree Gravity:** Reduces the gravitational computational complexity from $O(N^2)$ to $O(N \log N)$.
 - **Spatial Hash Grid Collisions:** Implements a flat-array spatial hash grid coupled with a Union-Find (Disjoint Set) algorithm for $O(N)$ collision detection and momentum-conserving mass accretion.
 - **Genetic Algorithm (Headless Training):** Evaluates universes based on a dimensionless multiplicative fitness function (survival rate, orbital circularity, mass concentration, and spatial containment) over thousands of ticks natively without rendering overhead.
-- **Parallel Processing:** Leverages `Rayon` for multi-threaded physics integration and `mimalloc` for optimised memory allocation.
-- **Real-time Diagnostic Visualisation:** Features an in-engine interactive camera and a real-time debug visualisation of the Octree spatial partitioning.
+- **Parallel Processing:** Leverages `Rayon` for multi-threaded physics integration and `mimalloc` for optimized memory allocation.
+- **Real-time Diagnostic Visualization:** Features an in-engine interactive camera and a real-time debug visualization of the Octree spatial partitioning.
 
 ## Controls (Visual Showcase Mode)
 
