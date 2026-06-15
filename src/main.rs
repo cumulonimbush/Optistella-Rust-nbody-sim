@@ -4,7 +4,6 @@ mod genalg;
 mod octree;
 mod physics;
 
-use crate::config::*;
 use bevy::{
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     core_pipeline::tonemapping::Tonemapping,
@@ -15,7 +14,6 @@ use bevy::{
 };
 use genalg::*;
 use physics::*;
-use rand::RngExt;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -125,6 +123,7 @@ fn update_metrics(
     sim_state.tick_counter += 1;
     if sim_state.tick_counter % 60 == 0 {
         let mut fps = 0.0;
+        let mut frame_time = 0.0;
         let mut text = textq.single_mut().unwrap();
         if let Some(fps_diagnostic) =
             diagnostics.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
@@ -133,10 +132,17 @@ fn update_metrics(
                 fps = fps_value;
             }
         }
+        if let Some(ft_diagnostic) =
+            diagnostics.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        {
+            if let Some(ft_value) = ft_diagnostic.smoothed() {
+                frame_time = ft_value;
+            }
+        }
         let body_count = query.iter().count();
         text.0 = format!(
-            "FPS: {:.1}\nActive Objects: {}\nSimulation Speed: {:.1}x\nPaused {}",
-            fps, body_count, sim_state.speed, sim_state.is_paused
+            "FPS: {:.1}\nFrame Time: {:.2} ms\nActive Objects: {}\nSimulation Speed: {:.1}x\nPaused {}",
+            fps, frame_time, body_count, sim_state.speed, sim_state.is_paused
         );
     }
 }

@@ -88,6 +88,7 @@ pub struct GeneticEngine {
     pub best_generation: usize,
     pub initial_body_count: usize,
     pub initial_rms_radius: f32,
+    pub epoch_start_time: std::time::Instant,
 }
 
 impl Default for GeneticEngine {
@@ -108,6 +109,7 @@ impl Default for GeneticEngine {
             best_generation: 1,
             initial_body_count: BODY_COUNT as usize,
             initial_rms_radius: 1.0,
+            epoch_start_time: std::time::Instant::now(),
         }
     }
 }
@@ -354,6 +356,7 @@ pub fn init_population(
         engine.initial_body_count, engine.initial_rms_radius
     );
 
+    engine.epoch_start_time = std::time::Instant::now();
     next_state.set(AppState::Simulate);
 }
 
@@ -372,6 +375,9 @@ pub fn evaluate_generation(
     mut engine: ResMut<GeneticEngine>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
+    let elapsed = engine.epoch_start_time.elapsed();
+    let avg_frame_time = elapsed.as_secs_f64() * 1000.0 / engine.max_ticks as f64;
+
     let mut total_mass = 0.0f32;
     let mut max_mass = 0.0f32;
     let mut sum_sq_dist = 0.0f32;
@@ -441,6 +447,10 @@ pub fn evaluate_generation(
     let fitness = s_mass * s_orbit * s_contain * s_survival;
 
     println!("=== [Evaluation of Gen {}] ===", engine.generation);
+    println!(
+        "  Saf Fizik İşlem Süresi (Ortalama): {:.3} ms / tick",
+        avg_frame_time
+    );
     println!(
         "  Fitness: {:.6} (S_mass: {:.4}, S_orbit: {:.4}, S_contain: {:.4}, S_survival: {:.4})",
         fitness, s_mass, s_orbit, s_contain, s_survival
